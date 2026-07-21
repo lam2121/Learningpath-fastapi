@@ -1,6 +1,18 @@
-# Import tất cả các model vào đây để Alembic có thể quét được toàn bộ metadata
 from app.core.database import Base
-from app.models.user import User, Role
-from app.models.curriculum import JobRole, Course, Topic, Lesson
-from app.models.assessment import QuizType, PlacementTestQuestion, Quiz, QuizDetail, Survey, SurveyUser
-from app.models.tracking import Queue, UserCourse, UserCourseSkillVector, UserLesson
+
+from app.models.role import Role
+from app.models.job_role import JobRole
+from app.models.quiz_type import QuizType
+from app.models.user import User
+from app.models.course import Course
+from app.models.topic import Topic
+from app.models.lesson import Lesson
+from app.models.placement_test_question import PlacementTestQuestion
+from app.models.quiz import Quiz
+from app.models.quiz_detail import QuizDetail
+from app.models.survey import Survey
+from app.models.survey_user import SurveyUser
+from app.models.queue import Queue
+from app.models.user_course import UserCourse
+from app.models.user_course_skill_vector import UserCourseSkillVector
+from app.models.user_lesson import UserLesson

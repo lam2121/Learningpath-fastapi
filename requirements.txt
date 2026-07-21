@@ -9,3 +9,4 @@ pydantic-settings==2.2.1
 passlib[bcrypt]==4.0.1 # Băm và kiểm tra mật khẩu
 python-jose[cryptography]==3.3.0 # Xử lý JWT Token
 pydantic[email]
+python-multipart

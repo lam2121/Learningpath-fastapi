@@ -14,9 +14,9 @@ class AppConfig(BaseSettings):
     DB_CONNECT_TIMEOUT: int = 30
     DB_POOL_RECYCLE: int = 3600
     
-    SECRET_KEY: str = ""
+    SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440 
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     
     class Config:
         env_file = ".env"

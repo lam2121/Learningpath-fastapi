@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from urllib.parse import quote_plus
 
 class AppConfig(BaseSettings):
     MYSQL_HOST: str = "localhost"
@@ -25,6 +26,8 @@ class AppConfig(BaseSettings):
     # TỰ ĐỘNG SINH CHUỖI KẾT NỐI CHO SQLALCHEMY
     @property
     def DATABASE_URL(self) -> str:
-        return f"mysql+pymysql://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DB}"
+        # Dùng quote_plus để mã hóa mật khẩu nếu có ký tự đặc biệt như @, #, $, v.v.
+        safe_password = quote_plus(self.MYSQL_PASSWORD)
+        return f"mysql+pymysql://{self.MYSQL_USER}:{safe_password}@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DB}"
         
 app_config = AppConfig()

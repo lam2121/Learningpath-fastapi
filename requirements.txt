@@ -1,3 +1,12 @@
-numpy
-matplotlib
-pandas
+fastapi==0.110.1
+uvicorn==0.29.0
+sqlalchemy>=2.0.36
+pymysql==1.1.0        # Driver để Python kết nối với MySQL
+cryptography==42.0.5  # Bắt buộc đi kèm pymysql để hỗ trợ mã hóa
+alembic==1.13.1       # Quản lý migration
+python-dotenv==1.0.1  # Đọc biến môi trường
+pydantic-settings==2.2.1
+passlib[bcrypt]==4.0.1 # Băm và kiểm tra mật khẩu
+python-jose[cryptography]==3.3.0 # Xử lý JWT Token
+pydantic[email]
+python-multipart

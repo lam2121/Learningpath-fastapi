@@ -6,7 +6,8 @@ cryptography==42.0.5  # Bắt buộc đi kèm pymysql để hỗ trợ mã hóa
 alembic==1.13.1       # Quản lý migration
 python-dotenv==1.0.1  # Đọc biến môi trường
 pydantic-settings==2.2.1
-passlib[bcrypt]==4.0.1 # Băm và kiểm tra mật khẩu
+passlib[bcrypt]==1.7.4 # Băm và kiểm tra mật khẩu
+bcrypt==4.3.0
 python-jose[cryptography]==3.3.0 # Xử lý JWT Token
 pydantic[email]
 python-multipart

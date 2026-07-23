@@ -16,3 +16,4 @@ class User(Base):
     email = Column(String(254), nullable=False) #[cite: 2]
     hashed_password = Column(String(255), nullable=False) # Cột mới chuẩn bị update
     created_at = Column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP')) #[cite: 2]
+    age = Column(String(150), nullable=True)

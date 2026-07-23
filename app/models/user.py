@@ -10,6 +10,7 @@ class User(Base):
         {'comment': 'Nguoi dung he thong'}
     )
 
+
     id = Column(BIGINT, primary_key=True, autoincrement=True, nullable=False)
     role_id = Column(BIGINT(unsigned=True), ForeignKey('role.id', ondelete='SET NULL'), nullable=True)
     job_role_id = Column(BIGINT, ForeignKey('job_role.id', ondelete='SET NULL'), nullable=True)

@@ -20,7 +20,9 @@ class UserLogin(BaseModel):
 class UserResponse(UserBase):
     id: int
     role_id: Optional[int] = None
+    is_finished_survey: bool = False
     created_at: datetime
+
 
     # Cấu hình này giúp Pydantic đọc được dữ liệu từ SQLAlchemy Model
     class Config:

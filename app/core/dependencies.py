@@ -1,14 +1,17 @@
+from typing import Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from sqlalchemy.orm import Session
 from app.core.database import get_db
+
 from app.core.config import app_config
 from app.models.user import User
 
 # Khai báo cấu hình OAuth2. 
 # tokenUrl chỉ ra API nào được dùng để lấy token (dành cho Swagger UI)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
@@ -35,3 +38,15 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise credentials_exception
         
     return user
+
+def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme_optional), db: Session = Depends(get_db)):
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, app_config.SECRET_KEY, algorithms=[app_config.ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            return None
+        return db.query(User).filter(User.id == int(user_id)).first()
+    except Exception:
+        return None

@@ -31,5 +31,16 @@ class SubmitSurveyResponse(BaseModel):
 
 class OnboardingStatusResponse(BaseModel):
     user_id: int
-    has_completed_survey: bool
+    has_completed_survey: bool = False
+    is_finished_placement_test: bool = False
+
+class CompletePlacementTestRequest(BaseModel):
+    user_id: Optional[int] = None
+    role_id: Optional[int] = None
+    survey_answers: Optional[List[SurveyAnswerItem]] = None
+
+class CompletePlacementTestResponse(BaseModel):
+    message: str
+    is_finished_placement_test: bool = True
+
 

@@ -123,7 +123,7 @@ def complete_placement_test(
     user = db.query(User).filter(User.id == user_id).first()
     if user:
         if role_id:
-            user.role_id = role_id
+            user.job_role_id = role_id  # Store selected job role (FK to job_role table)
         user.is_finished_placement_test = True
         db.commit()
         return True

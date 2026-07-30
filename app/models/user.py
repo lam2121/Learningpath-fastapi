@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Boolean, text
+from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Boolean, text, BigInteger
 
 from sqlalchemy.dialects.mysql import BIGINT
 from app.core.database import Base
@@ -13,6 +13,7 @@ class User(Base):
 
     id = Column(BIGINT, primary_key=True, autoincrement=True, nullable=False) #[cite: 2]
     role_id = Column(BIGINT(unsigned=True), ForeignKey('role.id', ondelete='SET NULL'), nullable=True) #[cite: 2]
+    job_role_id = Column(BigInteger, ForeignKey('job_role.id', ondelete='SET NULL'), nullable=True)  # Selected job role from placement test
     name = Column(String(150), nullable=False) #[cite: 2]
     email = Column(String(254), nullable=False) #[cite: 2]
     hashed_password = Column(String(255), nullable=False) # Cột mới chuẩn bị update

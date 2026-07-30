@@ -1,5 +1,5 @@
-from sqlalchemy import Column, Integer, ForeignKey, Index
-from sqlalchemy.dialects.mysql import BIGINT , JSON
+from sqlalchemy import Column, ForeignKey, Index, JSON
+from sqlalchemy.dialects.mysql import BIGINT
 from app.core.database import Base
 
 class SurveyUser(Base):

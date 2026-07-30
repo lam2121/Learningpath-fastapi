@@ -1,6 +1,5 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Index, Boolean, text
-
-from sqlalchemy.dialects.mysql import BIGINT
+from sqlalchemy import Column, String, DateTime, ForeignKey, Index, text
+from sqlalchemy.dialects.mysql import BIGINT, TINYINT
 from app.core.database import Base
 
 class User(Base):
@@ -15,6 +14,6 @@ class User(Base):
     role_id = Column(BIGINT(unsigned=True), ForeignKey('role.id', ondelete='SET NULL'), nullable=True) #[cite: 2]
     name = Column(String(150), nullable=False) #[cite: 2]
     email = Column(String(254), nullable=False) #[cite: 2]
-    hashed_password = Column(String(255), nullable=False) # Cột mới chuẩn bị update
-    is_finished_survey = Column(Boolean, nullable=False, default=False, server_default=text('0'))
-    created_at = Column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP')) #[cite: 2]
+    hashed_password = Column(String(255), nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=text('CURRENT_TIMESTAMP'))
+    is_finished_survey = Column(TINYINT(display_width=1), nullable=False, server_default=text('0'))

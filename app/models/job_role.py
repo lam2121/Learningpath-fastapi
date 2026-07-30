@@ -10,10 +10,6 @@ class JobRole(Base):
 
     name = Column(String(100), nullable=False)
 
-    # Thông tin UI
-    UI = Column(JSON, nullable=False)
-
-    # AI
     JD = Column(LONGTEXT, nullable=False)
     seed_tier = Column(JSON, nullable=False)
     init_weights = Column(JSON, nullable=False)

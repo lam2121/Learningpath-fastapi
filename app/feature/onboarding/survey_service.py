@@ -1,5 +1,5 @@
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from app.models.survey import Survey
 from app.models.survey_user import SurveyUser
@@ -62,7 +62,7 @@ from app.models.user import User
 
 def has_user_completed_survey(db: Session, user_id: int) -> bool:
     user = db.query(User).filter(User.id == user_id).first()
-    if user and user.is_finished_survey:
+    if user and user.is_finished_placement_test:
         return True
     return db.query(SurveyUser).filter(SurveyUser.user_id == user_id).first() is not None
 
@@ -108,13 +108,27 @@ def save_user_survey_answers(db: Session, user_id: int, answers: List[Any]) -> i
         db.add(survey_user_record)
         count += 1
 
-    # Mark is_finished_survey = True on user record
-    user = db.query(User).filter(User.id == user_id).first()
-    if user:
-        user.is_finished_survey = True
-
     db.commit()
     return count
+
+def complete_placement_test(
+    db: Session,
+    user_id: int,
+    answers: Optional[List[Any]] = None,
+    role_id: Optional[int] = None
+) -> bool:
+    if answers:
+        save_user_survey_answers(db, user_id=user_id, answers=answers)
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        if role_id:
+            user.job_role_id = role_id  # Store selected job role (FK to job_role table)
+        user.is_finished_placement_test = True
+        db.commit()
+        return True
+    return False
+
 
 
 

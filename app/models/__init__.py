@@ -16,3 +16,4 @@ from app.models.queue import Queue
 from app.models.user_course import UserCourse
 from app.models.user_course_skill_vector import UserCourseSkillVector
 from app.models.user_lesson import UserLesson
+from app.models.user_placement_test import UserPlacementTest

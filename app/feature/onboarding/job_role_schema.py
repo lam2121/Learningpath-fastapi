@@ -9,6 +9,7 @@ class JobRoleResponse(BaseModel):
     seed_tier: Any
     init_weights: Any
     example_question: Any
+    weight_descriptions: Any = None
 
     class Config:
         from_attributes = True

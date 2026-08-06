@@ -8,6 +8,7 @@ class JobRoleResponse(BaseModel):
     name: str
     job_description: str | None = None
     baseline: dict | None = None
+    g_skill_description: str | None = None
     example_question: Any | None = None
 
     class Config:

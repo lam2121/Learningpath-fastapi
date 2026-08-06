@@ -16,7 +16,7 @@ class JobRole(Base):
 
     id = Column(BIGINT, primary_key=True, autoincrement=True)
 
-    name = Column(String(100), nullable=False)
+    name = Column(String(45), nullable=False)
 
     # v2.1 columns
     job_description = Column(LONGTEXT, nullable=False)

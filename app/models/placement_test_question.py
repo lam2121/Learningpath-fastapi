@@ -1,5 +1,6 @@
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Index
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.mysql import BIGINT, LONGTEXT
+
 from app.core.database import Base
 
 

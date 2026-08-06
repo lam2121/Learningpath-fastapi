@@ -10,8 +10,6 @@ from app.models.lesson import Lesson
 from app.models.placement_test_question import PlacementTestQuestion
 from app.models.quiz import Quiz
 from app.models.quiz_detail import QuizDetail
-from app.models.survey import Survey
-from app.models.survey_user import SurveyUser
 from app.models.queue import Queue
 from app.models.user_course import UserCourse
 from app.models.user_course_skill_vector import UserCourseSkillVector
@@ -20,3 +18,4 @@ from app.models.generation import RoleGeneration
 from app.models.ai_usage_log import AiUsageLog
 from app.models.rejected_content import RejectedContent
 from app.models.system_setting import SystemSetting
+from app.models.user_placement_test import UserPlacementTest

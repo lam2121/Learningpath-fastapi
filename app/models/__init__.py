@@ -16,3 +16,7 @@ from app.models.queue import Queue
 from app.models.user_course import UserCourse
 from app.models.user_course_skill_vector import UserCourseSkillVector
 from app.models.user_lesson import UserLesson
+from app.models.generation import RoleGeneration
+from app.models.ai_usage_log import AiUsageLog
+from app.models.rejected_content import RejectedContent
+from app.models.system_setting import SystemSetting

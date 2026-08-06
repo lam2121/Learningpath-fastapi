@@ -84,15 +84,24 @@ def finalize_placement_test(
     current_user: Optional[User] = Depends(get_current_user_optional)
 ):
     """
-    Finalize onboarding: save survey answers if present, set user role_id, and set is_finished_placement_test = 1.
+    Finalize onboarding: save placement test answers, set user role_id, and set is_finished_placement_test = 1.
     """
     try:
-        user_id = current_user.id if current_user else (request.user_id or 1)
+        if current_user:
+            user_id = current_user.id
+        elif request.user_id:
+            user_id = request.user_id
+        else:
+            fallback_user = db.query(User).first()
+            if not fallback_user:
+                raise ValueError("No user found in database for placement test fallback")
+            user_id = fallback_user.id
+
         complete_placement_test(
             db,
             user_id=user_id,
-            answers=request.survey_answers,
-            role_id=request.role_id
+            role_id=request.role_id,
+            placement_test_answers=request.placement_test_answers
         )
         return CompletePlacementTestResponse(
             message="Placement test completed and onboarding saved successfully",

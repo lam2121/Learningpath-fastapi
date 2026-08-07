@@ -33,6 +33,10 @@ class AppConfig(BaseSettings):
     Zen: str = ""
     Google: str = ""
 
+    # Set to True in environments with corporate SSL interception / self-signed certs
+    # that cause CERTIFICATE_VERIFY_FAILED errors when calling external APIs.
+    DISABLE_SSL_VERIFY: bool = False
+
     class Config:
         env_file = ".env"
         case_sensitive = True

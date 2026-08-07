@@ -59,8 +59,16 @@ _SYSTEM_CA_CANDIDATES = (
 )
 
 
-def _default_ssl_context() -> ssl.SSLContext:
-    """Build a verify-enabled SSL context that prefers the system CA bundle."""
+def _default_ssl_context() -> ssl.SSLContext | bool:
+    """Return an SSL context (or False to disable verification) for httpx.
+
+    - If DISABLE_SSL_VERIFY=True in config, return False to skip all SSL checks.
+      Use this in dev environments with corporate SSL interception.
+    - Otherwise, prefer the system CA bundle over certifi's bundled roots so
+      corporate/internal CAs that are trusted system-wide are picked up.
+    """
+    if app_config.DISABLE_SSL_VERIFY:
+        return False  # httpx: disable SSL verification entirely
     env_file = os.environ.get("SSL_CERT_FILE")
     candidates = ([env_file] if env_file else []) + list(_SYSTEM_CA_CANDIDATES)
     for path in candidates:
@@ -254,12 +262,10 @@ class GeminiClientPool:
                 raise GenerationError(f"{provider.name}: unexpected response shape")
             if not content or not content.strip():
                 raise GenerationError(f"{provider.name}: empty response")
-            try:
-                json.loads(content)
-            except (ValueError, TypeError) as exc:
-                raise GenerationError(
-                    f"{provider.name}: response is not valid JSON ({exc})"
-                )
+            # We do NOT parse the JSON here using json.loads(content).
+            # The caller (e.g., generation.py) has robust parsing logic that strips Markdown 
+            # and sends validation feedback to the LLM on JSONDecodeError. 
+            # If we raise here, it breaks the retry loop.
             usage = body.get("usage") or {}
             return LLMResponse(
                 text=content,
@@ -287,7 +293,7 @@ class GeminiClientPool:
         *,
         temperature: float = 0.3,
         top_p: float = 0.8,
-        max_output_tokens: int = 2048,
+        max_output_tokens: int = 4096,
     ) -> LLMResponse:
         """
         Try each provider in round-robin until one succeeds.

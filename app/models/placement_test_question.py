@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Index
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Index, JSON
 from sqlalchemy.dialects.mysql import BIGINT, LONGTEXT
 from app.core.database import Base
 
@@ -11,7 +11,7 @@ class PlacementTestQuestion(Base):
     )
 
     id = Column(BIGINT, primary_key=True, autoincrement=True, nullable=False) #[cite: 2]
-    question = Column(LONGTEXT, nullable=False) #[cite: 2]
+    question = Column(JSON, nullable=False) #[cite: 2]
     created_at = Column(DateTime, nullable=False) #[cite: 2]
     skill = Column(String(45), nullable=False) #[cite: 2]
     level = Column(Integer, nullable=False) #[cite: 2]

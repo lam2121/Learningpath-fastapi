@@ -1,15 +1,16 @@
-from pydantic import BaseModel
 from typing import Any
+
+from pydantic import BaseModel
 
 
 class JobRoleResponse(BaseModel):
     id: int
     name: str
-    JD: str
-    seed_tier: Any
-    init_weights: Any
-    example_question: Any
-    weight_descriptions: Any = None
+    job_description: str | None = None
+    baseline: dict | None = None
+    g_skill_description: str | None = None
+    example_question: Any | None = None
+    is_active: bool = True
 
     class Config:
         from_attributes = True

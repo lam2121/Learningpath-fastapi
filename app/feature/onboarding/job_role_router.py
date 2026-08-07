@@ -1,4 +1,4 @@
-from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -9,7 +9,7 @@ from app.feature.onboarding.job_role_service import fetch_all_active_job_roles
 router = APIRouter()
 
 
-@router.get("/job-roles", response_model=List[JobRoleResponse], status_code=status.HTTP_200_OK)
+@router.get("/job-roles", response_model=list[JobRoleResponse], status_code=status.HTTP_200_OK)
 def get_job_roles(db: Session = Depends(get_db)):
     """
     Return all job roles stored in the database.
@@ -20,5 +20,5 @@ def get_job_roles(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch job roles: {str(e)}",
+            detail=f"Failed to fetch job roles: {e!s}",
         )

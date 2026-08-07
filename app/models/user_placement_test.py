@@ -1,5 +1,6 @@
-from sqlalchemy import Column, JSON, ForeignKey, Index
+from sqlalchemy import JSON, Column, ForeignKey, Index
 from sqlalchemy.dialects.mysql import BIGINT
+
 from app.core.database import Base
 
 

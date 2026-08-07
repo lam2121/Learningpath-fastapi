@@ -3,8 +3,8 @@ from urllib.parse import quote_plus
 
 class AppConfig(BaseSettings):
     MYSQL_HOST: str = "localhost"
-    MYSQL_USER: str = "example_user"
-    MYSQL_PASSWORD: str = "password"
+    MYSQL_USER: str = "root"
+    MYSQL_PASSWORD: str = "12345678x@X"
     MYSQL_DB: str = "toeic_learningpath"
     MYSQL_PORT: str = "3306"
     

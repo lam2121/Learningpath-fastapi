@@ -59,9 +59,7 @@ class RoleCreate(BaseModel):
 
     @field_validator("example_question")
     @classmethod
-    def normalize_example_question(
-        cls, v: list[str] | None
-    ) -> list[str] | None:
+    def normalize_example_question(cls, v: list[str] | None) -> list[str] | None:
         if v is None:
             return None
         cleaned = [q.strip() for q in v if q and q.strip()]
@@ -88,9 +86,7 @@ class RoleUpdate(BaseModel):
 
     @field_validator("example_question")
     @classmethod
-    def normalize_example_question(
-        cls, v: list[str] | None
-    ) -> list[str] | None:
+    def normalize_example_question(cls, v: list[str] | None) -> list[str] | None:
         if v is None:
             return None
         cleaned = [q.strip() for q in v if q and q.strip()]
@@ -132,6 +128,11 @@ class GenerationStatusResponse(BaseModel):
 class GenerateResponse(BaseModel):
     message: str
     roleId: int
+
+
+class ResetLearnersResponse(BaseModel):
+    resetLearners: int
+    clearedAnswers: int
 
 
 # ─── Preview (stubbed) ───────────────────────────────────────────────────────

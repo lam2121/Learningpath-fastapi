@@ -5,8 +5,8 @@ from pydantic_settings import BaseSettings
 
 class AppConfig(BaseSettings):
     MYSQL_HOST: str = "localhost"
-    MYSQL_USER: str = "example_user"
-    MYSQL_PASSWORD: str = "password"
+    MYSQL_USER: str = "root"
+    MYSQL_PASSWORD: str = "123456"
     MYSQL_DB: str = "toeic_learningpath"
     MYSQL_PORT: str = "3306"
 

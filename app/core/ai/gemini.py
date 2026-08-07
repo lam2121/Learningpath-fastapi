@@ -254,6 +254,12 @@ class GeminiClientPool:
                 raise GenerationError(f"{provider.name}: unexpected response shape")
             if not content or not content.strip():
                 raise GenerationError(f"{provider.name}: empty response")
+            try:
+                json.loads(content)
+            except (ValueError, TypeError) as exc:
+                raise GenerationError(
+                    f"{provider.name}: response is not valid JSON ({exc})"
+                )
             usage = body.get("usage") or {}
             return LLMResponse(
                 text=content,

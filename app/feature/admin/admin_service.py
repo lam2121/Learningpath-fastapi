@@ -7,6 +7,7 @@ and the kill switch.
 from datetime import datetime, timedelta
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.ai.gemini import AI_GENERATION_ENABLED_KEY, generation_enabled
@@ -32,6 +33,7 @@ from app.models.placement_test_question import PlacementTestQuestion
 from app.models.rejected_content import RejectedContent
 from app.models.system_setting import SystemSetting
 from app.models.user import User
+from app.models.user_placement_test import UserPlacementTest
 
 # ─── Serialization helpers ───────────────────────────────────────────────────
 
@@ -64,6 +66,7 @@ def _role_to_response(db: Session, role: JobRole) -> RoleResponse:
         )
         .count()
     )
+    _mark_stale_generation(db, role.id)
     gen = (
         db.query(RoleGeneration)
         .filter(RoleGeneration.role_id == role.id)
@@ -169,16 +172,206 @@ def deactivate_role(db: Session, role_id: int) -> RoleResponse:
     return _role_to_response(db, role)
 
 
+def activate_role(db: Session, role_id: int) -> RoleResponse:
+    role = get_role_or_404(db, role_id)
+    role.is_active = True
+    db.commit()
+    db.refresh(role)
+    return _role_to_response(db, role)
+
+
+def delete_role(db: Session, role_id: int) -> None:
+    """Permanently delete a role and its generated content.
+
+    Guarded like regeneration: refuses while a run is active and while
+    learner answers reference the role's questions (admin must reset
+    learners first). ai_usage_log / rejected_content / user.job_role_id
+    are handled by SET NULL FKs; role_generation is deleted explicitly.
+    """
+    role = get_role_or_404(db, role_id)
+    _mark_stale_generation(db, role_id)
+
+    latest = (
+        db.query(RoleGeneration)
+        .filter(RoleGeneration.role_id == role_id)
+        .order_by(RoleGeneration.id.desc())
+        .first()
+    )
+    if latest and latest.status in ("in_progress", "pending"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Generation is already {latest.status} for this role.",
+        )
+
+    saved = has_saved_answers(db, role_id)
+    if saved > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{saved} saved learner answer(s) reference this role's questions. "
+                "Reset learners for this role before deleting."
+            ),
+        )
+
+    try:
+        question_ids = [
+            qid
+            for (qid,) in db.query(PlacementTestQuestion.id)
+            .filter(PlacementTestQuestion.job_role_id == role_id)
+            .all()
+        ]
+        if question_ids:
+            db.query(PlacementTestQuestion).filter(
+                PlacementTestQuestion.id.in_(question_ids)
+            ).delete(synchronize_session=False)
+        db.query(RoleGeneration).filter(RoleGeneration.role_id == role_id).delete(
+            synchronize_session=False
+        )
+        db.delete(role)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot delete this role because other records still reference it.",
+        )
+
+
 # ─── Generation (Generator A) ────────────────────────────────────────────────
 
+STALE_GENERATION_MINUTES = 15
 
-def kickoff_generation(db: Session, role_id: int) -> dict:
+
+def _mark_stale_generation(db: Session, role_id: int) -> None:
+    """Recover jobs that were left 'in_progress' by a crashed worker."""
+    stale = (
+        db.query(RoleGeneration)
+        .filter(
+            RoleGeneration.role_id == role_id,
+            RoleGeneration.status.in_(["in_progress", "pending"]),
+            RoleGeneration.started_at.isnot(None),
+            RoleGeneration.started_at
+            < datetime.utcnow() - timedelta(minutes=STALE_GENERATION_MINUTES),
+        )
+        .all()
+    )
+    for gen in stale:
+        gen.status = "failed"
+        gen.error_message = "Marked failed: generation did not finish within timeout"
+        gen.finished_at = datetime.utcnow()
+    if stale:
+        db.commit()
+
+
+def has_saved_answers(db: Session, role_id: int) -> int:
+    """Number of learner answers that reference this role's questions."""
+    return (
+        db.query(UserPlacementTest.id)
+        .join(
+            PlacementTestQuestion,
+            UserPlacementTest.placement_test_question_id == PlacementTestQuestion.id,
+        )
+        .filter(PlacementTestQuestion.job_role_id == role_id)
+        .count()
+    )
+
+
+def kickoff_generation(db: Session, role_id: int, force: bool = False) -> dict:
     get_role_or_404(db, role_id)
+    if not generation_enabled(db):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "AI generation is disabled (kill switch ON). Enable it on the "
+                "Kill Switch page before generating."
+            ),
+        )
+    _mark_stale_generation(db, role_id)
+
+    latest = (
+        db.query(RoleGeneration)
+        .filter(RoleGeneration.role_id == role_id)
+        .order_by(RoleGeneration.id.desc())
+        .first()
+    )
+    if latest and latest.status in ("in_progress", "pending"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Generation is already {latest.status} for this role.",
+        )
+
+    question_count = get_placement_question_count(db, role_id)
+    if question_count > 0 and not force:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Role already has {question_count} placement questions. "
+                "Pass force=true to regenerate (replaces the existing pool)."
+            ),
+        )
+
+    saved = has_saved_answers(db, role_id)
+    if saved > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{saved} saved learner answer(s) reference this role's questions. "
+                "Reset learners for this role before regenerating."
+            ),
+        )
+
+    # Reserve the run synchronously so a second concurrent POST sees it.
+    db.add(
+        RoleGeneration(
+            role_id=role_id,
+            status="in_progress",
+            step="a",
+            started_at=datetime.utcnow(),
+        )
+    )
+    db.commit()
+
     return {"message": "Placement generation started", "roleId": role_id}
+
+
+def reset_role_learners(db: Session, role_id: int) -> dict:
+    """Clear saved answers + placement flags for learners of a role."""
+    get_role_or_404(db, role_id)
+
+    question_ids = [
+        qid
+        for (qid,) in db.query(PlacementTestQuestion.id)
+        .filter(PlacementTestQuestion.job_role_id == role_id)
+        .all()
+    ]
+
+    cleared_answers = 0
+    if question_ids:
+        cleared_answers = (
+            db.query(UserPlacementTest)
+            .filter(UserPlacementTest.placement_test_question_id.in_(question_ids))
+            .delete(synchronize_session=False)
+        )
+
+    assigned = (
+        db.query(User)
+        .filter(
+            User.job_role_id == role_id,
+            User.is_finished_placement_test.is_(True),
+        )
+        .all()
+    )
+    for user in assigned:
+        user.is_finished_placement_test = False
+        user.job_role_id = None
+
+    db.commit()
+    return {"resetLearners": len(assigned), "clearedAnswers": cleared_answers}
 
 
 def get_generation_status(db: Session, role_id: int) -> GenerationStatusResponse:
     get_role_or_404(db, role_id)
+    _mark_stale_generation(db, role_id)
     gen = (
         db.query(RoleGeneration)
         .filter(RoleGeneration.role_id == role_id)

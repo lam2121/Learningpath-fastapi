@@ -10,6 +10,7 @@ class JobRoleResponse(BaseModel):
     baseline: dict | None = None
     g_skill_description: str | None = None
     example_question: Any | None = None
+    is_active: bool = True
 
     class Config:
         from_attributes = True

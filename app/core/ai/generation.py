@@ -5,10 +5,12 @@ Runs 4 Flash calls (one per skill) -> validates each block against spec §9
 logs every call to ai_usage_log, records rejections, tracks role_generation.
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.ai.cost import estimate_cost_usd, extract_usage
@@ -35,6 +37,10 @@ MODEL = app_config.GEMINI_FLASH_MODEL
 QUIZ_TYPE_ID = 1  # quiz_type: 'multiple choice'
 MAX_ATTEMPTS = 3  # original + max 2 retries (spec §8.1)
 LETTER_TO_INDEX = {"A": 0, "B": 1, "C": 2, "D": 3}
+
+# Serializes background generation per role so concurrent clicks can never
+# interleave deletes/inserts and multiply the question pool.
+_role_locks: dict[int, asyncio.Lock] = {}
 
 
 def _parse_json(text: str):
@@ -223,89 +229,146 @@ async def _generate_skill_block(
 
 async def generate_placement_for_role(role_id: int) -> dict:
     """Background job: generate 48 placement questions for a role (Generator A)."""
-    db = SessionLocal()
-    try:
-        role = db.query(JobRole).filter(JobRole.id == role_id).first()
-        if role is None:
-            return {"status": "failed", "error": "role not found"}
-
-        gen = RoleGeneration(
-            role_id=role_id, status="in_progress", step="a", started_at=datetime.now(timezone.utc)
-        )
-        db.add(gen)
-        db.commit()
-        db.refresh(gen)
-
+    lock = _role_locks.setdefault(role_id, asyncio.Lock())
+    async with lock:
+        db = SessionLocal()
+        gen: RoleGeneration | None = None
         try:
-            assert_generation_enabled(db)
-        except KillSwitchError as exc:
-            gen.status = "failed"
+            role = db.query(JobRole).filter(JobRole.id == role_id).first()
+            if role is None:
+                return {"status": "failed", "error": "role not found"}
+
+            # The in_progress row is reserved synchronously by kickoff_generation.
+            # Reuse it; fall back to creating one if it was never persisted.
+            gen = (
+                db.query(RoleGeneration)
+                .filter(
+                    RoleGeneration.role_id == role_id,
+                    RoleGeneration.status == "in_progress",
+                )
+                .order_by(RoleGeneration.id.desc())
+                .first()
+            )
+            if gen is None:
+                gen = RoleGeneration(
+                    role_id=role_id,
+                    status="in_progress",
+                    step="a",
+                    started_at=datetime.now(timezone.utc),
+                )
+                db.add(gen)
+                db.commit()
+                db.refresh(gen)
+
+            # Belt & braces: another run for this role must not be active.
+            active = (
+                db.query(RoleGeneration)
+                .filter(
+                    RoleGeneration.role_id == role_id,
+                    RoleGeneration.status.in_(["in_progress", "pending"]),
+                    RoleGeneration.id != gen.id,
+                )
+                .first()
+            )
+            if active is not None:
+                gen.status = "failed"
+                gen.error_message = "Superseded by another generation run"
+                gen.finished_at = datetime.now(timezone.utc)
+                db.commit()
+                return {"status": "failed", "error": gen.error_message}
+
+            try:
+                assert_generation_enabled(db)
+            except KillSwitchError as exc:
+                gen.status = "failed"
+                gen.step = "a"
+                gen.error_message = str(exc)
+                gen.finished_at = datetime.now(timezone.utc)
+                db.commit()
+                return {"status": "failed", "error": str(exc)}
+
+            client = GeminiClientPool()
+            total_count = 0
+            total_errors = 0
+
+            # Idempotent: delete the role's existing placement pool before
+            # re-inserting. Guarded at kickoff, but fail cleanly (never hang)
+            # if learner answers still reference these questions.
+            try:
+                db.query(PlacementTestQuestion).filter(
+                    PlacementTestQuestion.job_role_id == role_id
+                ).delete()
+                db.commit()
+            except IntegrityError as exc:
+                db.rollback()
+                gen.status = "failed"
+                gen.error_message = (
+                    "Cannot regenerate: existing learner answers reference these "
+                    f"questions ({exc.orig})"
+                )
+                gen.finished_at = datetime.now(timezone.utc)
+                db.commit()
+                return {"status": "failed", "error": gen.error_message}
+
+            for skill in SKILLS:
+                try:
+                    rows, usage_logs, error = await _generate_skill_block(
+                        client, role, skill
+                    )
+                except (GenerationError, KillSwitchError) as exc:
+                    rows, usage_logs, error = None, [], str(exc)
+
+                for log in usage_logs:
+                    _log_usage(
+                        db,
+                        "A",
+                        role_id,
+                        log["prompt_tokens"],
+                        log["completion_tokens"],
+                        log["status"],
+                        log.get("provider"),
+                        log.get("model"),
+                    )
+
+                if rows is not None:
+                    count = _insert_questions(db, role_id, skill, rows)
+                    total_count += count
+                    db.commit()
+                else:
+                    total_errors += 1
+                    _record_rejected(
+                        db,
+                        role_id,
+                        f"role={role.name}, skill={skill}",
+                        error or "unknown",
+                        None,
+                        None,
+                    )
+                    _log_usage(db, "A", role_id, 0, 0, "rejected")
+                    db.commit()
+
+            gen.status = "completed" if total_errors == 0 else "failed"
             gen.step = "a"
-            gen.error_message = str(exc)
+            gen.step_a_count = total_count
+            gen.step_a_errors = total_errors
             gen.finished_at = datetime.now(timezone.utc)
             db.commit()
+
+            logger.info(
+                "Generator A finished for role %s: %s questions, %s errors",
+                role_id,
+                total_count,
+                total_errors,
+            )
+            return {"status": gen.status, "count": total_count, "errors": total_errors}
+        except Exception as exc:
+            logger.exception("Generator A crashed for role %s", role_id)
+            if gen is not None:
+                db.rollback()
+                gen.status = "failed"
+                gen.error_message = str(exc)[:500]
+                gen.finished_at = datetime.now(timezone.utc)
+                db.commit()
             return {"status": "failed", "error": str(exc)}
-
-        client = GeminiClientPool()
-        total_count = 0
-        total_errors = 0
-
-        # Idempotent: delete the role's existing placement pool before re-inserting
-        db.query(PlacementTestQuestion).filter(
-            PlacementTestQuestion.job_role_id == role_id
-        ).delete()
-        db.commit()
-
-        for skill in SKILLS:
-            try:
-                rows, usage_logs, error = await _generate_skill_block(
-                    client, role, skill
-                )
-            except (GenerationError, KillSwitchError) as exc:
-                rows, usage_logs, error = None, [], str(exc)
-
-            for log in usage_logs:
-                _log_usage(
-                    db,
-                    "A",
-                    role_id,
-                    log["prompt_tokens"],
-                    log["completion_tokens"],
-                    log["status"],
-                    log.get("provider"),
-                    log.get("model"),
-                )
-
-            if rows is not None:
-                count = _insert_questions(db, role_id, skill, rows)
-                total_count += count
-                db.commit()
-            else:
-                total_errors += 1
-                _record_rejected(
-                    db,
-                    role_id,
-                    f"role={role.name}, skill={skill}",
-                    error or "unknown",
-                    None,
-                    None,
-                )
-                _log_usage(db, "A", role_id, 0, 0, "rejected")
-                db.commit()
-
-        gen.status = "completed" if total_errors == 0 else "failed"
-        gen.step = "a"
-        gen.step_a_count = total_count
-        gen.step_a_errors = total_errors
-        gen.finished_at = datetime.now(timezone.utc)
-        db.commit()
-
-        logger.info(
-            "Generator A finished for role %s: %s questions, %s errors",
-            role_id,
-            total_count,
-            total_errors,
-        )
-        return {"status": gen.status, "count": total_count, "errors": total_errors}
-    finally:
-        db.close()
+        finally:
+            db.close()

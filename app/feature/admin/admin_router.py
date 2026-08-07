@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -15,6 +14,7 @@ from app.feature.admin.admin_schema import (
     PreviewResponse,
     RejectedContentResponse,
     RejectedContentStatusUpdate,
+    ResetLearnersResponse,
     RoleCreate,
     RoleResponse,
     RoleUpdate,
@@ -57,18 +57,36 @@ def deactivate_role(role_id: int, db: Session = Depends(get_db)):
     return admin_service.deactivate_role(db, role_id)
 
 
+@router.post("/roles/{role_id}/activate", response_model=RoleResponse)
+def activate_role(role_id: int, db: Session = Depends(get_db)):
+    return admin_service.activate_role(db, role_id)
+
+
+@router.delete("/roles/{role_id}", status_code=204)
+def delete_role(role_id: int, db: Session = Depends(get_db)):
+    admin_service.delete_role(db, role_id)
+
+
 # ─── Generation (Generator A) ────────────────────────────────────────────────
 
 
 @router.post("/roles/{role_id}/generate", response_model=GenerateResponse)
 def generate_role_content(
-    role_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+    role_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    force: bool = Query(default=False),
 ):
-    admin_service.kickoff_generation(db, role_id)
+    admin_service.kickoff_generation(db, role_id, force=force)
     from app.core.ai.generation import generate_placement_for_role
 
     background_tasks.add_task(generate_placement_for_role, role_id)
     return GenerateResponse(message="Placement generation started", roleId=role_id)
+
+
+@router.post("/roles/{role_id}/reset-learners", response_model=ResetLearnersResponse)
+def reset_role_learners(role_id: int, db: Session = Depends(get_db)):
+    return admin_service.reset_role_learners(db, role_id)
 
 
 @router.get(

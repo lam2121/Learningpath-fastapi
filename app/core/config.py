@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings
 class AppConfig(BaseSettings):
     MYSQL_HOST: str = "localhost"
     MYSQL_USER: str = "root"
-    MYSQL_PASSWORD: str = "123456"
+    MYSQL_PASSWORD: str = "12345678x@X"
     MYSQL_DB: str = "toeic_learningpath"
     MYSQL_PORT: str = "3306"
 
@@ -59,6 +59,10 @@ class AppConfig(BaseSettings):
     # Reserved but not wired into the rotation registry:
     Zen: str = ""
     Google: str = ""
+
+    # Set to True in environments with corporate SSL interception / self-signed certs
+    # that cause CERTIFICATE_VERIFY_FAILED errors when calling external APIs.
+    DISABLE_SSL_VERIFY: bool = False
 
     class Config:
         env_file = ".env"

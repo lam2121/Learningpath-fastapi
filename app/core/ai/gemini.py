@@ -82,8 +82,12 @@ def _concat_ca_dir(ca_dir: str | Path) -> Path:
     return bundle
 
 
-def _default_ssl_context() -> ssl.SSLContext:
+def _default_ssl_context() -> ssl.SSLContext | bool:
     """Build a verify-enabled SSL context that prefers an explicit CA source.
+
+    Returns False (httpx: disable verification entirely) when
+    DISABLE_SSL_VERIFY is set in config for environments with corporate
+    SSL interception / self-signed certs.
 
     Resolution order:
       1. app_config.SSL_CERT_FILE (set in .env)   — single PEM bundle
@@ -92,6 +96,8 @@ def _default_ssl_context() -> ssl.SSLContext:
       4. known system CA bundle locations (incl. Windows Git bundle)
       5. certifi defaults (ssl.create_default_context with no args)
     """
+    if app_config.DISABLE_SSL_VERIFY:
+        return False  # httpx: disable SSL verification entirely
     # (1) + (3) file, explicit config before process env.
     for env in (
         app_config.SSL_CERT_FILE,
@@ -307,12 +313,10 @@ class GeminiClientPool:
                 raise GenerationError(f"{provider.name}: unexpected response shape")
             if not content or not content.strip():
                 raise GenerationError(f"{provider.name}: empty response")
-            try:
-                json.loads(content)
-            except (ValueError, TypeError) as exc:
-                raise GenerationError(
-                    f"{provider.name}: response is not valid JSON ({exc})"
-                )
+            # We do NOT parse the JSON here using json.loads(content).
+            # The caller (e.g., generation.py) has robust parsing logic that strips Markdown 
+            # and sends validation feedback to the LLM on JSONDecodeError. 
+            # If we raise here, it breaks the retry loop.
             usage = body.get("usage") or {}
             return LLMResponse(
                 text=content,

@@ -19,3 +19,4 @@ from app.models.ai_usage_log import AiUsageLog
 from app.models.rejected_content import RejectedContent
 from app.models.system_setting import SystemSetting
 from app.models.user_placement_test import UserPlacementTest
+from app.models.user_roadmap import UserRoadmap

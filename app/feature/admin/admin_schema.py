@@ -120,6 +120,10 @@ class GenerationStatusResponse(BaseModel):
     step: str
     stepACount: int
     stepAErrors: int
+    stepB1Count: int = 0
+    stepB1Errors: int = 0
+    stepB2Count: int = 0
+    stepB2Errors: int = 0
     startedAt: datetime | None = None
     finishedAt: datetime | None = None
     errorMessage: str | None = None
@@ -133,6 +137,7 @@ class GenerateResponse(BaseModel):
 class ResetLearnersResponse(BaseModel):
     resetLearners: int
     clearedAnswers: int
+    clearedRoadmaps: int
 
 
 # ─── Preview (stubbed) ───────────────────────────────────────────────────────

@@ -15,7 +15,7 @@ class PlacementTestQuestionResponse(BaseModel):
 
 class OnboardingStatusResponse(BaseModel):
     user_id: int
-    is_finished_placement_test: bool = False
+    learning_status: str = "none"  # 'none' | 'enrolled' (docs/07 deviation #23)
 
 
 class PlacementTestResultItem(BaseModel):
@@ -35,7 +35,7 @@ class CompletePlacementTestRequest(BaseModel):
 
 class CompletePlacementTestResponse(BaseModel):
     message: str
-    is_finished_placement_test: bool = True
+    learning_status: str = "enrolled"
 
 
 class PlacementAnswerDetail(BaseModel):
@@ -51,7 +51,7 @@ class PlacementAnswerDetail(BaseModel):
 
 
 class PlacementResultResponse(BaseModel):
-    is_finished_placement_test: bool
+    learning_status: str  # 'none' | 'enrolled'
     total_questions: int
     total_correct: int
     overall_percent: int

@@ -1,19 +1,36 @@
 """Token -> USD cost estimation from Gemini API usageMetadata (spec §7.3).
 
 Rates are aligned to gemini-2.5-flash text pricing (model is configured via
-GEMINI_FLASH_MODEL). Adjust here if real billing differs.
+GEMINI_FLASH_MODEL) and gemini-2.5-pro pricing (GEMINI_PRO_MODEL, Generators
+C-1/C-2). `estimate_cost_usd(..., model=...)` picks the rate set: any model
+that differs from the configured Flash model is billed at the Pro rate.
+Adjust here if real billing differs.
 """
+
+from app.core.config import app_config
 
 # Per-1K-token USD rates (Gemini 2.5 Flash, text)
 FLASH_INPUT_RATE_PER_1K = 0.0003  # ~$0.30 / 1M input tokens
 FLASH_OUTPUT_RATE_PER_1K = 0.0025  # ~$2.50 / 1M output tokens
 
+# Per-1K-token USD rates (Gemini 2.5 Pro, text — Generators C-1/C-2)
+PRO_INPUT_RATE_PER_1K = 0.00125  # ~$1.25 / 1M input tokens
+PRO_OUTPUT_RATE_PER_1K = 0.01  # ~$10.00 / 1M output tokens
 
-def estimate_cost_usd(prompt_tokens: int, completion_tokens: int) -> float:
-    """Compute estimated USD cost from token counts."""
+
+def estimate_cost_usd(
+    prompt_tokens: int, completion_tokens: int, model: str | None = None
+) -> float:
+    """Compute estimated USD cost from token counts.
+
+    `model` selects the rate set: the configured Flash model (or None) uses
+    Flash rates; anything else uses Pro rates.
+    """
+    pro = model is not None and model != app_config.GEMINI_FLASH_MODEL
+    input_rate = PRO_INPUT_RATE_PER_1K if pro else FLASH_INPUT_RATE_PER_1K
+    output_rate = PRO_OUTPUT_RATE_PER_1K if pro else FLASH_OUTPUT_RATE_PER_1K
     return (
-        prompt_tokens / 1000.0 * FLASH_INPUT_RATE_PER_1K
-        + completion_tokens / 1000.0 * FLASH_OUTPUT_RATE_PER_1K
+        prompt_tokens / 1000.0 * input_rate + completion_tokens / 1000.0 * output_rate
     )
 
 

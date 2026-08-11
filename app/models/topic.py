@@ -1,17 +1,25 @@
-from sqlalchemy import Column, String, Integer, JSON, ForeignKey, Index
+from sqlalchemy import Column, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.mysql import BIGINT
+
 from app.core.database import Base
 
+
 class Topic(Base):
-    __tablename__ = 'topic'
+    __tablename__ = "topic"
     __table_args__ = (
-        Index('fk_topic_course_idx', 'course_id'), #[cite: 2]
-        {'comment': 'Pool 20 Topics / Role, sinh boi Generator B'} #[cite: 2]
+        Index("fk_topic_job_role_idx", "role_id"),
+        {"comment": "Pool 20 Topics / Role, sinh boi Generator B"},
     )
 
-    id = Column(BIGINT, primary_key=True, autoincrement=True, nullable=False) #[cite: 2]
-    name = Column(String(255), nullable=False) #[cite: 2]
-    english_level = Column(Integer, nullable=False, comment='Essentials -> Advanced Jargon') #[cite: 2]
-    skill_weight = Column(JSON, nullable=False) #[cite: 2]
-    business_level = Column(Integer, nullable=False) #[cite: 2]
-    course_id = Column(BIGINT, ForeignKey('course.id', ondelete='CASCADE', onupdate='CASCADE'), nullable=False) #[cite: 2]
+    id = Column(BIGINT, primary_key=True, autoincrement=True, nullable=False)
+    role_id = Column(
+        BIGINT,
+        ForeignKey("job_role.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+    )
+    name = Column(String(255), nullable=False)
+    primary_skill = Column(
+        String(45), nullable=False, comment="D_doc | C_comm | T_trouble | G_custom"
+    )
+    seed_tier = Column(String(10), nullable=False, comment="tier_1 | tier_2")
+    sort_order = Column(Integer, nullable=False)

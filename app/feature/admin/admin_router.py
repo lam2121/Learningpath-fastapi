@@ -84,6 +84,39 @@ def generate_role_content(
     return GenerateResponse(message="Placement generation started", roleId=role_id)
 
 
+@router.post("/roles/{role_id}/generate-course", response_model=GenerateResponse)
+def generate_role_course(
+    role_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    force: bool = Query(default=False),
+):
+    admin_service.kickoff_course_generation(db, role_id, force=force)
+    from app.core.ai.generation import generate_course_for_role
+
+    background_tasks.add_task(generate_course_for_role, role_id)
+    return GenerateResponse(
+        message="Course generation started (B1 topics -> B2 lesson shells)",
+        roleId=role_id,
+    )
+
+
+@router.post("/lessons/{lesson_id}/generate", response_model=GenerateResponse)
+def generate_lesson_content(
+    lesson_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    force: bool = Query(default=False),
+):
+    info = admin_service.kickoff_lesson_generation(db, lesson_id, force=force)
+    from app.core.ai.generation import (
+        generate_lesson_content as _generate_lesson_content,
+    )
+
+    background_tasks.add_task(_generate_lesson_content, lesson_id, force=force)
+    return GenerateResponse(message=info["message"], roleId=info["roleId"])
+
+
 @router.post("/roles/{role_id}/reset-learners", response_model=ResetLearnersResponse)
 def reset_role_learners(role_id: int, db: Session = Depends(get_db)):
     return admin_service.reset_role_learners(db, role_id)

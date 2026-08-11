@@ -4,15 +4,27 @@ from fastapi import HTTPException, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.config import app_config
+from app.core.roadmap import SKILLS, assigned_lessons, select_roadmap
 from app.feature.onboarding.placement_evaluator import classify_user
 from app.feature.onboarding.placement_test_schema import (
     PlacementAnswerDetail,
     PlacementResultResponse,
     PlacementTestQuestionResponse,
 )
+from app.feature.onboarding.roadmap_schema import (
+    RoadmapLessonResponse,
+    RoadmapResponse,
+    RoadmapTopicResponse,
+    SkillOverrideRequest,
+)
 from app.models.job_role import DEFAULT_BASELINE, JobRole
+from app.models.lesson import Lesson
 from app.models.placement_test_question import PlacementTestQuestion
+from app.models.topic import Topic
+from app.models.user import LEARNING_ENROLLED, LEARNING_NONE
 from app.models.user_placement_test import UserPlacementTest
+from app.models.user_roadmap import UserRoadmap
 
 # Map v2.1 full tag -> short letter used by the existing frontend response
 SKILL_TAG_TO_SHORT = {
@@ -192,35 +204,19 @@ def complete_placement_test(
             db, user_id=user_id, answers=placement_test_answers
         )
 
-    user.is_finished_placement_test = True
+    user.learning_status = LEARNING_ENROLLED
     db.commit()
+
+    # Phase A: build the zero-AI learning roadmap (spec §2.C) from the saved
+    # answers. Silently skips when the role has no topics yet (B1/B2 not run);
+    # a later recompute (POST /onboarding/roadmap/select) fills it.
+    build_and_save_roadmap(db, user_id)
     return True
 
 
-def get_placement_test_result(db: Session, user_id: int) -> PlacementResultResponse:
-    """
-    Fetch a user's placement test result from user_placement_test + placement_test_question.
-    Returns computed scores, starting level, and per-question detail.
-    """
-    from app.models.job_role import JobRole
-    from app.models.user import User
-
-    # Load user and check if placement is finished
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        return PlacementResultResponse(
-            is_finished_placement_test=False,
-            total_questions=0,
-            total_correct=0,
-            overall_percent=0,
-            skill_scores={},
-            starting_level="basic",
-            weak_skills=[],
-            answers=[],
-        )
-
-    # Load user's placement test answers joined with questions
-    rows = (
+def _load_placement_answer_rows(db: Session, user_id: int):
+    """Load a user's saved placement answers joined with their questions."""
+    return (
         db.query(UserPlacementTest, PlacementTestQuestion)
         .join(
             PlacementTestQuestion,
@@ -230,32 +226,16 @@ def get_placement_test_result(db: Session, user_id: int) -> PlacementResultRespo
         .all()
     )
 
-    if not rows:
-        return PlacementResultResponse(
-            is_finished_placement_test=user.is_finished_placement_test,
-            total_questions=0,
-            total_correct=0,
-            overall_percent=0,
-            skill_scores={},
-            starting_level="basic",
-            weak_skills=[],
-            answers=[],
-        )
 
-    # Parse user_answer JSON and build per-question detail
+def _parse_answer_rows(rows) -> tuple[list[PlacementAnswerDetail], dict, dict]:
+    """Build per-question detail + per-skill correct/total counts.
+
+    Shared by `get_placement_test_result` and `compute_skill_scores` so the
+    answer-parsing logic lives in exactly one place.
+    """
     answers: list[PlacementAnswerDetail] = []
-    skill_correct: dict[str, int] = {
-        "D_doc": 0,
-        "C_comm": 0,
-        "T_trouble": 0,
-        "G_custom": 0,
-    }
-    skill_total: dict[str, int] = {
-        "D_doc": 0,
-        "C_comm": 0,
-        "T_trouble": 0,
-        "G_custom": 0,
-    }
+    skill_correct: dict[str, int] = {s: 0 for s in SKILLS}
+    skill_total: dict[str, int] = {s: 0 for s in SKILLS}
 
     for user_test, question in rows:
         # Parse user_answer JSON
@@ -301,7 +281,7 @@ def get_placement_test_result(db: Session, user_id: int) -> PlacementResultRespo
         # Build answer detail
         answer = PlacementAnswerDetail(
             question_id=question.id,
-            axis=question.skill,  # authoritative skill tag (D_doc, C_comm, T_trouble, G_custom)
+            axis=question.skill,  # authoritative skill tag (D_doc, ...)
             level=question.level,
             statement=statement,
             options=options,
@@ -316,16 +296,69 @@ def get_placement_test_result(db: Session, user_id: int) -> PlacementResultRespo
         skill = question.skill
         if skill not in skill_correct:
             continue
-
         skill_total[skill] += 1
         if answer.is_correct:
             skill_correct[skill] += 1
 
+    return answers, skill_correct, skill_total
+
+
+def compute_skill_scores(db: Session, user_id: int) -> dict[str, float] | None:
+    """Compute per-skill fraction-correct scores from saved placement answers.
+
+    Returns None when the user has no saved answers (e.g. placement not taken).
+    """
+    rows = _load_placement_answer_rows(db, user_id)
+    if not rows:
+        return None
+    _, skill_correct, skill_total = _parse_answer_rows(rows)
+    return {
+        skill: skill_correct[skill] / max(1, skill_total[skill]) for skill in SKILLS
+    }
+
+
+def get_placement_test_result(db: Session, user_id: int) -> PlacementResultResponse:
+    """
+    Fetch a user's placement test result from user_placement_test + placement_test_question.
+    Returns computed scores, starting level, and per-question detail.
+    """
+    from app.models.job_role import JobRole
+    from app.models.user import User
+
+    # Load user and check if placement is finished
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return PlacementResultResponse(
+            learning_status=LEARNING_NONE,
+            total_questions=0,
+            total_correct=0,
+            overall_percent=0,
+            skill_scores={},
+            starting_level="basic",
+            weak_skills=[],
+            answers=[],
+        )
+
+    rows = _load_placement_answer_rows(db, user_id)
+    if not rows:
+        return PlacementResultResponse(
+            learning_status=user.learning_status,
+            total_questions=0,
+            total_correct=0,
+            overall_percent=0,
+            skill_scores={},
+            starting_level="basic",
+            weak_skills=[],
+            answers=[],
+        )
+
+    # Parse answers + accumulate per-skill counts (shared with compute_skill_scores)
+    answers, skill_correct, skill_total = _parse_answer_rows(rows)
+
     # Compute per-skill scores (fraction correct)
-    skill_scores_fraction: dict[str, float] = {}
-    for skill, correct in skill_correct.items():
-        total = max(1, skill_total[skill])  # avoid division by zero
-        skill_scores_fraction[skill] = correct / total
+    skill_scores_fraction: dict[str, float] = {
+        skill: skill_correct[skill] / max(1, skill_total[skill]) for skill in SKILLS
+    }
 
     # Overall score
     total_questions = sum(skill_total.values())
@@ -353,7 +386,7 @@ def get_placement_test_result(db: Session, user_id: int) -> PlacementResultRespo
     }
 
     return PlacementResultResponse(
-        is_finished_placement_test=user.is_finished_placement_test,
+        learning_status=user.learning_status,
         total_questions=total_questions,
         total_correct=total_correct,
         overall_percent=overall_percent,
@@ -365,3 +398,224 @@ def get_placement_test_result(db: Session, user_id: int) -> PlacementResultRespo
         baseline=baseline,
         answers=answers,
     )
+
+
+# ─── Phase A: zero-AI roadmap (spec §2.C) ────────────────────────────────────
+
+
+def _roadmap_shells(db: Session, role_id: int) -> list[Lesson]:
+    """All lesson shells of a role (used to count assigned lessons per skill)."""
+    return (
+        db.query(Lesson)
+        .join(Topic, Lesson.topic_id == Topic.id)
+        .filter(Topic.role_id == role_id)
+        .all()
+    )
+
+
+def _build_and_save_roadmap(
+    db: Session,
+    user_id: int,
+    *,
+    weak_skills: list[str] | None = None,
+    track: str | None = None,
+    role_id: int | None = None,
+    raise_on_missing: bool = False,
+) -> None:
+    """Select the user's 8-topic roadmap (spec §2.C) and persist it
+    (idempotent delete+insert). When `raise_on_missing` is False the function
+    returns silently if the prerequisites are missing (placement answers not
+    saved yet, or the role has no course outline) — the placement-test trigger
+    uses that mode; a later recompute fills the roadmap.
+    """
+    from app.models.user import User
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        if raise_on_missing:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+            )
+        return
+
+    role_id = role_id or user.job_role_id
+    if not role_id:
+        if raise_on_missing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="No career track selected yet",
+            )
+        return
+
+    if weak_skills is None or track is None:
+        scores = compute_skill_scores(db, user_id)
+        if not scores:
+            if raise_on_missing:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="No placement test answers to build a roadmap from",
+                )
+            return
+        track, weak_skills = classify_user(scores)
+
+    topics = (
+        db.query(Topic)
+        .filter(Topic.role_id == role_id)
+        .order_by(Topic.sort_order.asc())
+        .all()
+    )
+    if not topics:
+        if raise_on_missing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "No course outline for this track yet (B1/B2 not run). "
+                    "Generate it in the Admin portal first."
+                ),
+            )
+        return
+
+    shells = _roadmap_shells(db, role_id)
+    selected = select_roadmap(
+        user_id=user.id,
+        role_id=role_id,
+        weak_skills=weak_skills,
+        role_topics=topics,
+        lesson_shells=shells,
+        track=track,
+    )
+
+    db.query(UserRoadmap).filter(UserRoadmap.user_id == user_id).delete()
+    for i, topic in enumerate(selected):
+        db.add(
+            UserRoadmap(user_id=user_id, topic_id=topic.id, sort_order=i, track=track)
+        )
+    db.commit()
+
+
+def build_and_save_roadmap(db: Session, user_id: int) -> None:
+    """Silent roadmap build used by the placement-test completion trigger."""
+    _build_and_save_roadmap(db, user_id)
+
+
+def get_user_roadmap(db: Session, user_id: int) -> RoadmapResponse:
+    """Fetch the user's roadmap with lessons inline. Auto-computes when empty."""
+    from app.models.user import User
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
+
+    rows = (
+        db.query(UserRoadmap)
+        .filter(UserRoadmap.user_id == user_id)
+        .order_by(UserRoadmap.sort_order.asc())
+        .all()
+    )
+    if not rows:
+        _build_and_save_roadmap(db, user_id)
+        rows = (
+            db.query(UserRoadmap)
+            .filter(UserRoadmap.user_id == user_id)
+            .order_by(UserRoadmap.sort_order.asc())
+            .all()
+        )
+    if not rows:
+        return RoadmapResponse(track="", topics=[], assigned_lessons={})
+
+    track = rows[0].track
+    topic_ids = [r.topic_id for r in rows]
+    order = {r.topic_id: r.sort_order for r in rows}
+    topics = db.query(Topic).filter(Topic.id.in_(topic_ids)).all()
+    topics.sort(key=lambda t: order[t.id])
+
+    lessons = (
+        db.query(Lesson)
+        .filter(Lesson.topic_id.in_(topic_ids))
+        .order_by(Lesson.id.asc())
+        .all()
+    )
+    lessons_by_topic: dict[int, list[Lesson]] = {}
+    for lesson in lessons:
+        lessons_by_topic.setdefault(lesson.topic_id, []).append(lesson)
+
+    return RoadmapResponse(
+        track=track,
+        topics=[
+            RoadmapTopicResponse(
+                id=topic.id,
+                name=topic.name,
+                primary_skill=topic.primary_skill,
+                seed_tier=topic.seed_tier,
+                sort_order=topic.sort_order,
+                lessons=[
+                    RoadmapLessonResponse(
+                        id=lesson.id,
+                        title=lesson.title,
+                        primary_skill=lesson.primary_skill,
+                        difficulty_tier=lesson.difficulty_tier,
+                        is_generated=bool(lesson.is_generated),
+                        theory_content=lesson.theory_content,
+                        quiz_content=lesson.quiz_content,
+                    )
+                    for lesson in lessons_by_topic.get(topic.id, [])
+                ],
+            )
+            for topic in topics
+        ],
+        assigned_lessons=assigned_lessons(topics, lessons, track),
+    )
+
+
+def recompute_roadmap(
+    db: Session,
+    user_id: int,
+    *,
+    skills: SkillOverrideRequest | None = None,
+    role_id: int | None = None,
+) -> RoadmapResponse:
+    """Force-recompute the roadmap (idempotent delete+insert).
+
+    - Without `skills`: rebuilds from the user's stored placement answers
+      (existing E2E use).
+    - With `skills` (dev-mode, §12.9): skips placement answers entirely —
+      `fraction = value / 12` -> classify -> select. Returns 404 in production.
+    """
+    from app.models.user import User
+
+    if skills is not None:
+        if app_config.APP_ENV == "production":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Skill-score override is disabled in production",
+            )
+        track, weak_skills = classify_user(skills.as_fractions())
+        user = db.query(User).filter(User.id == user_id).first()
+        role_id = role_id or (user.job_role_id if user else None)
+        if not role_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="No career track selected yet",
+            )
+        _build_and_save_roadmap(
+            db,
+            user_id,
+            weak_skills=weak_skills,
+            track=track,
+            role_id=role_id,
+            raise_on_missing=True,
+        )
+        # Dev-mode enrollment (docs/07 deviation #23): a skills-override roadmap
+        # is a real live roadmap in a real role, so persist the enrollment so the
+        # user counts as an active learner and is not treated as a "new" learner
+        # on a deactivated track.
+        if user is not None:
+            user.job_role_id = role_id
+            user.learning_status = LEARNING_ENROLLED
+            db.commit()
+    else:
+        _build_and_save_roadmap(db, user_id, raise_on_missing=True)
+
+    return get_user_roadmap(db, user_id)

@@ -197,7 +197,7 @@ def _load_providers() -> list[ProviderConfig]:
             "mistral",
             "https://api.mistral.ai/v1",
             app_config.Mistral,
-            "mistral-small-latest",
+            "mistral-large-latest",
         ),
         (
             "nvidia",
@@ -270,9 +270,10 @@ class GeminiClientPool:
         temperature: float,
         top_p: float,
         max_output_tokens: int,
+        model_override: str | None = None,
     ) -> LLMResponse:
         payload = {
-            "model": provider.model,
+            "model": model_override or provider.model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
@@ -340,9 +341,15 @@ class GeminiClientPool:
         temperature: float = 0.3,
         top_p: float = 0.8,
         max_output_tokens: int = 2048,
+        model: str | None = None,
     ) -> LLMResponse:
         """
         Try each provider in round-robin until one succeeds.
+
+        `model` (optional) overrides the model on the **google** provider only
+        (used by Generators C-1/C-2 to route to GEMINI_PRO_MODEL). The other
+        providers keep their own configured model as a last-resort fallback, so
+        rotation is preserved.
 
         Quota errors put the provider on cooldown and rotate to the next one
         with a short backoff. After all providers are exhausted, raises
@@ -365,7 +372,12 @@ class GeminiClientPool:
             for provider in ordered:
                 try:
                     result = await self._call_provider(
-                        provider, prompt, temperature, top_p, max_output_tokens
+                        provider,
+                        prompt,
+                        temperature,
+                        top_p,
+                        max_output_tokens,
+                        model_override=model if provider.name == "google" else None,
                     )
                     return result
                 except GenerationError as exc:

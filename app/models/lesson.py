@@ -1,17 +1,29 @@
-from sqlalchemy import Column, String, Integer, JSON, ForeignKey, Index
+from sqlalchemy import JSON, Boolean, Column, ForeignKey, Index, String
 from sqlalchemy.dialects.mysql import BIGINT
+
 from app.core.database import Base
 
+
 class Lesson(Base):
-    __tablename__ = 'lesson'
+    __tablename__ = "lesson"
     __table_args__ = (
-        Index('fk_lesson_topic_idx', 'topic_id'), #[cite: 2]
+        Index("fk_lesson_topic_idx", "topic_id"),
+        {"comment": "Lesson shells / Role, sinh boi Generator B2"},
     )
 
-    id = Column(BIGINT, primary_key=True, autoincrement=True, nullable=False) #[cite: 2]
-    theory = Column(JSON, nullable=True) #[cite: 2]
-    topic_id = Column(BIGINT, ForeignKey('topic.id', ondelete='CASCADE', onupdate='CASCADE'), nullable=False) #[cite: 2]
-    name = Column(String(45), nullable=False) #[cite: 2]
-    skill_weight = Column(JSON, nullable=False) #[cite: 2]
-    english_level = Column(Integer, nullable=False) #[cite: 2]
-    business_level = Column(Integer, nullable=False) #[cite: 2]
+    id = Column(BIGINT, primary_key=True, autoincrement=True, nullable=False)
+    topic_id = Column(
+        BIGINT,
+        ForeignKey("topic.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+    )
+    title = Column(String(255), nullable=False)
+    primary_skill = Column(
+        String(45), nullable=False, comment="D_doc | C_comm | T_trouble | G_custom"
+    )
+    difficulty_tier = Column(
+        String(20), nullable=False, comment="basic | intermediate | advanced"
+    )
+    theory_content = Column(JSON, nullable=True)  # NULL until lazily generated (C-1)
+    quiz_content = Column(JSON, nullable=True)  # NULL until lazily generated (C-2)
+    is_generated = Column(Boolean, nullable=False, server_default="0")

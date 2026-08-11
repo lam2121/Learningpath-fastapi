@@ -29,13 +29,34 @@ from app.feature.admin.admin_schema import (
 from app.models.ai_usage_log import AiUsageLog
 from app.models.generation import RoleGeneration
 from app.models.job_role import DEFAULT_BASELINE, JobRole
+from app.models.lesson import Lesson
 from app.models.placement_test_question import PlacementTestQuestion
 from app.models.rejected_content import RejectedContent
 from app.models.system_setting import SystemSetting
-from app.models.user import User
+from app.models.topic import Topic
+from app.models.user import LEARNING_ENROLLED, LEARNING_NONE, User
 from app.models.user_placement_test import UserPlacementTest
+from app.models.user_roadmap import UserRoadmap
 
 # ─── Serialization helpers ───────────────────────────────────────────────────
+
+
+def count_active_learners(db: Session, role_id: int) -> int:
+    """Number of learners actively enrolled on a role.
+
+    `learning_status == 'enrolled'` is set only when a learner completes the
+    placement test (or the dev-mode skills override) together with
+    `job_role_id` — it is the single source of truth for "active learner",
+    replacing the old `is_finished_placement_test` proxy (docs/07 deviation #23).
+    """
+    return (
+        db.query(User)
+        .filter(
+            User.job_role_id == role_id,
+            User.learning_status == LEARNING_ENROLLED,
+        )
+        .count()
+    )
 
 
 def _baseline(role: JobRole) -> Baseline:
@@ -58,20 +79,20 @@ def _baseline_blob(baseline: Baseline) -> dict:
 
 
 def _role_to_response(db: Session, role: JobRole) -> RoleResponse:
-    active_learners = (
-        db.query(User)
-        .filter(
-            User.job_role_id == role.id,
-            User.is_finished_placement_test.is_(True),
-        )
-        .count()
-    )
+    active_learners = count_active_learners(db, role.id)
     _mark_stale_generation(db, role.id)
     gen = (
         db.query(RoleGeneration)
         .filter(RoleGeneration.role_id == role.id)
         .order_by(RoleGeneration.id.desc())
         .first()
+    )
+    topics_count = db.query(Topic).filter(Topic.role_id == role.id).count()
+    lessons_count = (
+        db.query(Lesson)
+        .join(Topic, Lesson.topic_id == Topic.id)
+        .filter(Topic.role_id == role.id)
+        .count()
     )
     return RoleResponse(
         id=role.id,
@@ -85,8 +106,8 @@ def _role_to_response(db: Session, role: JobRole) -> RoleResponse:
         isActive=role.is_active,
         createdBy=role.created_by,
         activeLearnerCount=active_learners,
-        topicsCount=0,
-        lessonsCount=0,
+        topicsCount=topics_count,
+        lessonsCount=lessons_count,
         generationStatus=gen.status if gen else None,
     )
 
@@ -224,8 +245,25 @@ def delete_role(db: Session, role_id: int) -> None:
             db.query(PlacementTestQuestion).filter(
                 PlacementTestQuestion.id.in_(question_ids)
             ).delete(synchronize_session=False)
+        # Course outline (lessons cascade via FK).
+        db.query(Topic).filter(Topic.role_id == role_id).delete(
+            synchronize_session=False
+        )
         db.query(RoleGeneration).filter(RoleGeneration.role_id == role_id).delete(
             synchronize_session=False
+        )
+        # Learners of the deleted role: job_role_id is SET NULL by the FK, so
+        # clear their enrollment status too — 'enrolled' must not outlive its track.
+        (
+            db.query(User)
+            .filter(
+                User.job_role_id == role_id,
+                User.learning_status == LEARNING_ENROLLED,
+            )
+            .update(
+                {"job_role_id": None, "learning_status": LEARNING_NONE},
+                synchronize_session=False,
+            )
         )
         db.delete(role)
         db.commit()
@@ -334,8 +372,132 @@ def kickoff_generation(db: Session, role_id: int, force: bool = False) -> dict:
     return {"message": "Placement generation started", "roleId": role_id}
 
 
+def kickoff_course_generation(db: Session, role_id: int, force: bool = False) -> dict:
+    """Start a B1+B2 course-outline generation (20 topics + 120 lesson shells).
+
+    Guard rails mirror Generator A, including a **reset-learners gate** (docs/07
+    deviation #23): the course outline feeds each enrolled learner's `user_roadmap`
+    (FK CASCADE), so regenerating it would silently replace their roadmap rows and
+    destroy any lazily-generated lesson content. The admin must reset learners
+    (clears placement answers + roadmap + enrollment) before regenerating.
+    """
+    get_role_or_404(db, role_id)
+    if not generation_enabled(db):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "AI generation is disabled (kill switch ON). Enable it on the "
+                "Kill Switch page before generating."
+            ),
+        )
+    _mark_stale_generation(db, role_id)
+
+    latest = (
+        db.query(RoleGeneration)
+        .filter(RoleGeneration.role_id == role_id)
+        .order_by(RoleGeneration.id.desc())
+        .first()
+    )
+    if latest and latest.status in ("in_progress", "pending"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Generation is already {latest.status} for this role.",
+        )
+
+    active_learners = count_active_learners(db, role_id)
+    if active_learners > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{active_learners} active learner(s) are enrolled on this role. "
+                "Reset learners for this role before regenerating the course outline."
+            ),
+        )
+
+    topic_count = db.query(Topic).filter(Topic.role_id == role_id).count()
+    if topic_count > 0 and not force:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Role already has {topic_count} topics. Pass force=true to "
+                "regenerate (replaces the existing course outline)."
+            ),
+        )
+
+    # Reserve the run synchronously so a second concurrent POST sees it.
+    db.add(
+        RoleGeneration(
+            role_id=role_id,
+            status="in_progress",
+            step="b1",
+            started_at=datetime.utcnow(),
+        )
+    )
+    db.commit()
+
+    return {"message": "Course generation started", "roleId": role_id}
+
+
+def kickoff_lesson_generation(db: Session, lesson_id: int, force: bool = False) -> dict:
+    """Validate a lazy C-1 (theory) + C-2 (quiz) generation for one lesson.
+
+    C-1/C-2 bypass the `RoleGeneration` batch table (docs/06 §4.3) — the row
+    itself acts as the cache and the per-lesson lock in generation.py guards
+    concurrent clicks, so there is nothing to "reserve" here. We only fail
+    fast on invalid state and stale content.
+    """
+    lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Lesson not found.")
+
+    topic = db.query(Topic).filter(Topic.id == lesson.topic_id).first()
+    if topic is None or not topic.role_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Lesson has no parent topic/role; cannot generate content.",
+        )
+    role_id = topic.role_id
+
+    if not generation_enabled(db):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "AI generation is disabled (kill switch ON). Enable it on the "
+                "Kill Switch page before generating."
+            ),
+        )
+
+    if lesson.is_generated and not force:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This lesson is already generated (shared — reused by all "
+                "learners of the role). Pass force=true to regenerate "
+                "(~$0.05, replaces theory + quiz)."
+            ),
+        )
+
+    if force:
+        lesson.theory_content = None
+        lesson.quiz_content = None
+        lesson.is_generated = False
+        db.commit()
+
+    return {
+        "message": "Lesson content generation started (C1 theory -> C2 quiz)",
+        "roleId": role_id,
+    }
+
+
 def reset_role_learners(db: Session, role_id: int) -> dict:
-    """Clear saved answers + placement flags for learners of a role."""
+    """De-enroll all learners of a role (docs/07 deviation #23).
+
+    Clears their saved placement answers (they reference the role's questions),
+    their per-learner `user_roadmap` rows (they reference the role's topics), and
+    resets `learning_status`/`job_role_id` so the admin can regenerate the
+    placement questions or the course outline. Topics/lessons — the role-level
+    curriculum — are left untouched; only learner-owned rows are removed.
+    """
     get_role_or_404(db, role_id)
 
     question_ids = [
@@ -353,20 +515,35 @@ def reset_role_learners(db: Session, role_id: int) -> dict:
             .delete(synchronize_session=False)
         )
 
+    topic_ids = [
+        tid for (tid,) in db.query(Topic.id).filter(Topic.role_id == role_id).all()
+    ]
+    cleared_roadmaps = 0
+    if topic_ids:
+        cleared_roadmaps = (
+            db.query(UserRoadmap)
+            .filter(UserRoadmap.topic_id.in_(topic_ids))
+            .delete(synchronize_session=False)
+        )
+
     assigned = (
         db.query(User)
         .filter(
             User.job_role_id == role_id,
-            User.is_finished_placement_test.is_(True),
+            User.learning_status == LEARNING_ENROLLED,
         )
         .all()
     )
     for user in assigned:
-        user.is_finished_placement_test = False
+        user.learning_status = LEARNING_NONE
         user.job_role_id = None
 
     db.commit()
-    return {"resetLearners": len(assigned), "clearedAnswers": cleared_answers}
+    return {
+        "resetLearners": len(assigned),
+        "clearedAnswers": cleared_answers,
+        "clearedRoadmaps": cleared_roadmaps,
+    }
 
 
 def get_generation_status(db: Session, role_id: int) -> GenerationStatusResponse:
@@ -392,6 +569,10 @@ def get_generation_status(db: Session, role_id: int) -> GenerationStatusResponse
         step=gen.step,
         stepACount=gen.step_a_count,
         stepAErrors=gen.step_a_errors,
+        stepB1Count=gen.step_b1_count,
+        stepB1Errors=gen.step_b1_errors,
+        stepB2Count=gen.step_b2_count,
+        stepB2Errors=gen.step_b2_errors,
         startedAt=gen.started_at,
         finishedAt=gen.finished_at,
         errorMessage=gen.error_message,
@@ -452,7 +633,7 @@ def get_dashboard(db: Session) -> DashboardData:
         db.query(User)
         .filter(
             User.job_role_id.isnot(None),
-            User.is_finished_placement_test.is_(True),
+            User.learning_status == LEARNING_ENROLLED,
         )
         .count()
     )

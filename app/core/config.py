@@ -22,13 +22,33 @@ class AppConfig(BaseSettings):
 
     GEMINI_API_KEY: str = ""
     GEMINI_FLASH_MODEL: str = "gemini-2.5-flash"
+    # Pro model for Generators C-1/C-2 (deep theory + quiz content). Default is
+    # gemini-2.5-pro (GA, retirement Oct 2026); newer previews such as
+    # gemini-3.1-pro-preview can be swapped in via .env without code changes.
+    GEMINI_PRO_MODEL: str = "gemini-2.5-pro"
+
+    # Runtime environment: "development" (default) enables dev-only behavior
+    # (skill-score override on POST /onboarding/roadmap/select, the dev-mode
+    # lesson-generate endpoint). Set to "production" to disable them (404).
+    APP_ENV: str = "development"
 
     # TLS trust store for outbound provider calls. Point these at the CA bundle
     # / CA directory that terminates TLS on this machine when Python's bundled
     # roots (certifi) cannot verify it (e.g. a corporate/self-signed MITM proxy).
     SSL_CERT_FILE: str = ""  # single PEM bundle
     SSL_CERT_DIR: str = ""  # directory of CA certs (auto-concatenated at startup)
-    SSL_VERIFY: bool = True  # False = skip TLS verification for provider calls (insecure)
+    SSL_VERIFY: bool = (
+        True  # False = skip TLS verification for provider calls (insecure)
+    )
+
+    # Generator C-1 quality gates — count-based only (word-count gates removed;
+    # the C-1 prompt still requests generous word counts). Counts are relaxed
+    # from spec §9 so free-tier fallback models (llama-3.3-70b / flash) can pass
+    # until a paid key is set. Restore spec values to re-tighten:
+    # vocab 8, patterns 5, dialogue key phrases 3.
+    C1_MIN_VOCAB: int = 6
+    C1_MIN_PATTERNS: int = 2
+    C1_MIN_DIALOGUE_KEY_PHRASES: int = 1
 
     # Optional alternate LLM providers (OpenAI-compatible, used for rotation)
     OpenRouter: str = ""

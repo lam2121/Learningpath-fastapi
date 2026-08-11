@@ -56,16 +56,67 @@ _SYSTEM_CA_CANDIDATES = (
     "/etc/ssl/cert.pem",  # Alpine
     "/usr/local/etc/openssl/cert.pem",  # macOS (Homebrew)
     "/opt/homebrew/etc/openssl/cert.pem",  # macOS (ARM Homebrew)
+    "C:/Program Files/Git/mingw64/etc/ssl/certs/ca-bundle.crt",  # Git for Windows
+    "C:/Program Files/Git/mingw64/etc/ssl/cert.pem",  # Git for Windows (alt)
 )
+
+_CA_FILE_EXTENSIONS = (".pem", ".crt", ".cer")
+
+
+def _concat_ca_dir(ca_dir: str | Path) -> Path:
+    """Concatenate every CA file in `ca_dir` into a single PEM bundle.
+
+    Windows trust stores / CA folders often hold per-certificate files with
+    arbitrary names, whereas OpenSSL's `capath` requires `c_rehash`-style
+    `<hash>.N` names. Concatenating to one bundle sidesteps that entirely.
+    """
+    base = Path(ca_dir)
+    bundle = Path(base) / ".ca-bundle.pem"
+    lines: list[str] = []
+    for entry in sorted(base.iterdir()):
+        if not entry.is_file() or entry.suffix.lower() not in _CA_FILE_EXTENSIONS:
+            continue
+        lines.append(f"# {entry.name}\n")
+        lines.append(entry.read_text(encoding="utf-8", errors="replace"))
+    bundle.write_text("\n".join(lines), encoding="utf-8")
+    return bundle
 
 
 def _default_ssl_context() -> ssl.SSLContext:
-    """Build a verify-enabled SSL context that prefers the system CA bundle."""
-    env_file = os.environ.get("SSL_CERT_FILE")
-    candidates = ([env_file] if env_file else []) + list(_SYSTEM_CA_CANDIDATES)
-    for path in candidates:
-        if path and Path(path).is_file():
+    """Build a verify-enabled SSL context that prefers an explicit CA source.
+
+    Resolution order:
+      1. app_config.SSL_CERT_FILE (set in .env)   — single PEM bundle
+      2. app_config.SSL_CERT_DIR  (set in .env)   — directory, concatenated
+      3. os.environ SSL_CERT_FILE / SSL_CERT_DIR  — classic env-var override
+      4. known system CA bundle locations (incl. Windows Git bundle)
+      5. certifi defaults (ssl.create_default_context with no args)
+    """
+    # (1) + (3) file, explicit config before process env.
+    for env in (
+        app_config.SSL_CERT_FILE,
+        os.environ.get("SSL_CERT_FILE", ""),
+    ):
+        if env and Path(env).is_file():
+            return ssl.create_default_context(cafile=env)
+    # (2) + (3) directory — concatenate to a bundle.
+    for ca_dir in (
+        app_config.SSL_CERT_DIR,
+        os.environ.get("SSL_CERT_DIR", ""),
+    ):
+        if ca_dir and Path(ca_dir).is_dir():
+            try:
+                bundle = _concat_ca_dir(ca_dir)
+            except OSError as exc:  # pragma: no cover - depends on FS state
+                raise GenerationError(
+                    f"Could not read CA directory {ca_dir!r}: {exc}"
+                ) from exc
+            return ssl.create_default_context(cafile=bundle)
+    # (4) well-known system bundles.
+    for path in _SYSTEM_CA_CANDIDATES:
+        if Path(path).is_file():
             return ssl.create_default_context(cafile=path)
+    # (5) certifi / OS defaults.
     return ssl.create_default_context()
 
 
@@ -179,8 +230,9 @@ class GeminiClientPool:
         self._cooldowns: dict[str, float] = {}
         self._lock = asyncio.Lock()
         self._last_call_at = 0.0
+        verify_target = _default_ssl_context() if app_config.SSL_VERIFY else False
         self._http = httpx.AsyncClient(
-            timeout=REQUEST_TIMEOUT_SECONDS, verify=_default_ssl_context()
+            timeout=REQUEST_TIMEOUT_SECONDS, verify=verify_target
         )
 
     async def close(self) -> None:

@@ -23,6 +23,13 @@ class AppConfig(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_FLASH_MODEL: str = "gemini-2.5-flash"
 
+    # TLS trust store for outbound provider calls. Point these at the CA bundle
+    # / CA directory that terminates TLS on this machine when Python's bundled
+    # roots (certifi) cannot verify it (e.g. a corporate/self-signed MITM proxy).
+    SSL_CERT_FILE: str = ""  # single PEM bundle
+    SSL_CERT_DIR: str = ""  # directory of CA certs (auto-concatenated at startup)
+    SSL_VERIFY: bool = True  # False = skip TLS verification for provider calls (insecure)
+
     # Optional alternate LLM providers (OpenAI-compatible, used for rotation)
     OpenRouter: str = ""
     Groq: str = ""

@@ -193,7 +193,7 @@ async def _generate_skill_block(
         role=role.name,
         job_description=role.job_description,
         target_skill=skill,
-        g_skill_description=role.g_skill_description,
+        skill_definitions=role.skill_definitions or {},
         seed_tier_1=role.seed_tier_1,
         seed_tier_2=role.seed_tier_2,
     )
@@ -425,7 +425,7 @@ async def _generate_topic_outline(client: GeminiClientPool, role: JobRole) -> tu
     prompt = build_prompt_b1(
         role=role.name,
         job_description=role.job_description,
-        g_skill_description=role.g_skill_description,
+        skill_definitions=role.skill_definitions or {},
         seed_tier_1=role.seed_tier_1,
         seed_tier_2=role.seed_tier_2,
         baseline=role.baseline or {},
@@ -511,7 +511,7 @@ async def _generate_lesson_shells(
         role=role.name,
         topic_name=topic.name,
         topic_skill=topic.primary_skill,
-        g_skill_description=role.g_skill_description or "",
+        skill_definitions=role.skill_definitions or {},
     )
 
     usage_logs: list[dict] = []
@@ -862,7 +862,7 @@ async def _generate_lesson_theory(
         lesson_title=lesson.title,
         primary_skill=lesson.primary_skill,
         difficulty_tier=lesson.difficulty_tier,
-        g_skill_description=role.g_skill_description or "",
+        skill_definitions=role.skill_definitions or {},
     )
 
     usage_logs: list[dict] = []
@@ -954,7 +954,7 @@ async def _generate_lesson_quiz(
         lesson_title=lesson.title,
         primary_skill=lesson.primary_skill,
         difficulty_tier=lesson.difficulty_tier,
-        g_skill_description=role.g_skill_description or "",
+        skill_definitions=role.skill_definitions or {},
         theory_content=json.dumps(theory, ensure_ascii=False),
     )
 

@@ -23,12 +23,19 @@ from app.feature.admin.admin_schema import (
     PreviewResponse,
     RejectedContentResponse,
     RoleCreate,
+    RoleSkillDefinitions,
     RoleResponse,
+    SkillDefinition,
     RoleUpdate,
 )
 from app.models.ai_usage_log import AiUsageLog
 from app.models.generation import RoleGeneration
-from app.models.job_role import DEFAULT_BASELINE, JobRole
+from app.models.job_role import (
+    DEFAULT_BASELINE,
+    DEFAULT_SKILL_DESCRIPTIONS,
+    JobRole,
+    default_skill_definitions,
+)
 from app.models.lesson import Lesson
 from app.models.placement_test_question import PlacementTestQuestion
 from app.models.rejected_content import RejectedContent
@@ -78,6 +85,42 @@ def _baseline_blob(baseline: Baseline) -> dict:
     }
 
 
+def _skill_definitions(role: JobRole) -> RoleSkillDefinitions:
+    blob = role.skill_definitions or default_skill_definitions()
+
+    def _definition(skill: str) -> SkillDefinition:
+        item = blob.get(skill) or {}
+        description = str(item.get("description", "")).strip()
+        if not description:
+            description = DEFAULT_SKILL_DESCRIPTIONS[skill]
+        examples = item.get("example_questions") or []
+        if not isinstance(examples, list):
+            examples = []
+        return SkillDefinition(
+            description=description,
+            example_questions=[q.strip() for q in examples if q and q.strip()],
+        )
+
+    return RoleSkillDefinitions(
+        D_doc=_definition("D_doc"),
+        C_comm=_definition("C_comm"),
+        T_trouble=_definition("T_trouble"),
+        G_custom=_definition("G_custom"),
+    )
+
+
+def _skill_definitions_blob(
+    skill_definitions: RoleSkillDefinitions,
+) -> dict[str, dict[str, str | list[str]]]:
+    return {
+        skill: {
+            "description": getattr(skill_definitions, skill).description,
+            "example_questions": list(getattr(skill_definitions, skill).example_questions),
+        }
+        for skill in DEFAULT_SKILL_DESCRIPTIONS
+    }
+
+
 def _role_to_response(db: Session, role: JobRole) -> RoleResponse:
     active_learners = count_active_learners(db, role.id)
     _mark_stale_generation(db, role.id)
@@ -99,10 +142,9 @@ def _role_to_response(db: Session, role: JobRole) -> RoleResponse:
         name=role.name,
         jobDescription=role.job_description or "",
         baseline=_baseline(role),
-        gSkillDefinition=role.g_skill_description or "",
+        skillDefinitions=_skill_definitions(role),
         seedTier1=role.seed_tier_1 or "",
         seedTier2=role.seed_tier_2 or "",
-        exampleQuestion=role.example_question or None,
         isActive=role.is_active,
         createdBy=role.created_by,
         activeLearnerCount=active_learners,
@@ -121,19 +163,14 @@ def _apply_role_payload(role: JobRole, payload: RoleCreate | RoleUpdate) -> None
     )
     if payload.baseline is not None:
         role.baseline = _baseline_blob(payload.baseline)
-    role.g_skill_description = (
-        payload.g_skill_description
-        if payload.g_skill_description is not None
-        else role.g_skill_description
-    )
+    if payload.skill_definitions is not None:
+        role.skill_definitions = _skill_definitions_blob(payload.skill_definitions)
     role.seed_tier_1 = (
         payload.seed_tier_1 if payload.seed_tier_1 is not None else role.seed_tier_1
     )
     role.seed_tier_2 = (
         payload.seed_tier_2 if payload.seed_tier_2 is not None else role.seed_tier_2
     )
-    if payload.example_question is not None:
-        role.example_question = payload.example_question or None
     if isinstance(payload, RoleUpdate) and payload.is_active is not None:
         role.is_active = payload.is_active
 
@@ -164,10 +201,9 @@ def create_role(db: Session, payload: RoleCreate, created_by: int) -> RoleRespon
         name=payload.name,
         job_description=payload.job_description,
         baseline=_baseline_blob(payload.baseline),
-        g_skill_description=payload.g_skill_description,
+        skill_definitions=_skill_definitions_blob(payload.skill_definitions),
         seed_tier_1=payload.seed_tier_1,
         seed_tier_2=payload.seed_tier_2,
-        example_question=payload.example_question or None,
         is_active=True,
         created_by=created_by,
     )
@@ -591,12 +627,19 @@ def get_placement_question_count(db: Session, role_id: int) -> int:
 
 
 def preview_generation(
-    job_description: str, g_skill_description: str
+    job_description: str, skill_definitions: RoleSkillDefinitions
 ) -> PreviewResponse:
-    is_vague = (
-        len(g_skill_description) < 50
-        or "work with" in g_skill_description.lower()
-        or " job" in g_skill_description.lower()
+    descriptions = [
+        skill_definitions.D_doc.description,
+        skill_definitions.C_comm.description,
+        skill_definitions.T_trouble.description,
+        skill_definitions.G_custom.description,
+    ]
+    is_vague = any(
+        len(description) < 50
+        or "work with" in description.lower()
+        or " job" in description.lower()
+        for description in descriptions
     )
     if is_vague:
         return PreviewResponse(
@@ -606,8 +649,8 @@ def preview_generation(
                 "Write periodic reports for management.",
             ],
             warning=(
-                "G-skill definition is too generic. AI generates non-specialized examples. "
-                "Please add specific technical keywords."
+                "One or more skill definitions are too generic. AI may generate "
+                "non-specialized examples. Please add specific technical keywords."
             ),
         )
     return PreviewResponse(

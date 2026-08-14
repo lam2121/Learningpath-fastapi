@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Index, text
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, text
 from sqlalchemy.dialects.mysql import BIGINT
 from app.core.database import Base
 
@@ -30,6 +30,9 @@ class User(Base):
         nullable=False,
         default=LEARNING_NONE,
         server_default=text("'none'"),
+    )
+    daily_study_minutes = Column(
+        Integer, nullable=False, default=120, server_default=text("120")
     )
     created_at = Column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")

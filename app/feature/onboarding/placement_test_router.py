@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.config import app_config
 from app.core.database import get_db
 from app.core.dependencies import get_current_user_optional
+from app.core.roadmap import lesson_is_assigned
 from app.feature.onboarding.placement_test_schema import (
     CompletePlacementTestRequest,
     CompletePlacementTestResponse,
@@ -270,6 +271,11 @@ async def generate_roadmap_lesson(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Lesson does not belong to your roadmap",
+        )
+    if not lesson_is_assigned(owned.track, lesson.difficulty_tier):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Lesson is not assigned for your track",
         )
 
     from app.core.ai.generation import generate_lesson_content

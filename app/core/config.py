@@ -38,7 +38,7 @@ class AppConfig(BaseSettings):
     SSL_CERT_FILE: str = ""  # single PEM bundle
     SSL_CERT_DIR: str = ""  # directory of CA certs (auto-concatenated at startup)
     SSL_VERIFY: bool = (
-        True  # False = skip TLS verification for provider calls (insecure)
+        False  # False = skip TLS verification for provider calls (insecure)
     )
 
     # Generator C-1 quality gates — count-based only (word-count gates removed;

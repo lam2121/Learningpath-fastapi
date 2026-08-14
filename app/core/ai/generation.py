@@ -695,9 +695,14 @@ async def generate_course_for_role(role_id: int) -> dict:
             # ── B-1: 20 topics ──────────────────────────────────────────────
             gen.step = "b1"
             db.commit()
-            topic_rows, usage_logs, b1_error = await _generate_topic_outline(
-                client, role
-            )
+            try:
+                topic_rows, usage_logs, b1_error = await _generate_topic_outline(
+                    client, role
+                )
+            except (GenerationError, KillSwitchError) as exc:
+                # A provider outage must not abort the whole run: record the
+                # failure and continue best-effort (Generator A convention).
+                topic_rows, usage_logs, b1_error = None, [], str(exc)
             for log in usage_logs:
                 _log_usage(
                     db,
@@ -744,9 +749,16 @@ async def generate_course_for_role(role_id: int) -> dict:
                 for topic in topics:
                     gen.step = "b2"
                     db.commit()
-                    shell_rows, usage_logs, b2_error = await _generate_lesson_shells(
-                        client, role, topic
-                    )
+                    try:
+                        (
+                            shell_rows,
+                            usage_logs,
+                            b2_error,
+                        ) = await _generate_lesson_shells(client, role, topic)
+                    except (GenerationError, KillSwitchError) as exc:
+                        # Provider outage: keep generating the other topics,
+                        # record the failure, and let the run finish with errors.
+                        shell_rows, usage_logs, b2_error = None, [], str(exc)
                     for log in usage_logs:
                         _log_usage(
                             db,
@@ -1060,9 +1072,12 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
             client = GeminiClientPool()
 
             # ── C-1: theory ──────────────────────────────────────────────────
-            theory, theory_usage, theory_error = await _generate_lesson_theory(
-                client, role, topic, lesson
-            )
+            try:
+                theory, theory_usage, theory_error = await _generate_lesson_theory(
+                    client, role, topic, lesson
+                )
+            except (GenerationError, KillSwitchError) as exc:
+                theory, theory_usage, theory_error = None, [], str(exc)
             for log in theory_usage:
                 _log_usage(
                     db,
@@ -1089,9 +1104,12 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
                 return {"status": "failed", "error": theory_error or "C-1 failed"}
 
             # ── C-2: quiz (grounded in the generated theory) ─────────────────
-            quiz, quiz_usage, quiz_error = await _generate_lesson_quiz(
-                client, role, topic, lesson, theory
-            )
+            try:
+                quiz, quiz_usage, quiz_error = await _generate_lesson_quiz(
+                    client, role, topic, lesson, theory
+                )
+            except (GenerationError, KillSwitchError) as exc:
+                quiz, quiz_usage, quiz_error = None, [], str(exc)
             for log in quiz_usage:
                 _log_usage(
                     db,

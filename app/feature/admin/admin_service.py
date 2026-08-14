@@ -480,6 +480,7 @@ def kickoff_lesson_generation(db: Session, lesson_id: int, force: bool = False) 
     if force:
         lesson.theory_content = None
         lesson.quiz_content = None
+        lesson.estimated_minutes = None
         lesson.is_generated = False
         db.commit()
 

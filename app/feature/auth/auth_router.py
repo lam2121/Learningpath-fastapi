@@ -1,13 +1,73 @@
+from datetime import date, timedelta
+from math import ceil
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
+
 from app.core.database import get_db
-from app.feature.auth.auth_schema import UserCreate, UserResponse, LoginResponse
-from app.models.user import User
-from app.core.security import get_password_hash, verify_password, create_access_token
 from app.core.dependencies import get_current_user
+from app.core.roadmap import lesson_is_assigned
+from app.core.security import get_password_hash, verify_password, create_access_token
+from app.feature.auth.auth_schema import (
+    LoginResponse,
+    StudySettingsUpdateRequest,
+    UserCreate,
+    UserProfileResponse,
+    UserResponse,
+)
+from app.models.lesson import Lesson
+from app.models.user import User
+from app.models.user_roadmap import UserRoadmap
 
 router = APIRouter()
+DEFAULT_DAILY_STUDY_MINUTES = 120
+
+
+def _build_user_profile_response(db: Session, user: User) -> UserProfileResponse:
+    roadmap_rows = (
+        db.query(UserRoadmap)
+        .filter(UserRoadmap.user_id == user.id)
+        .order_by(UserRoadmap.created_at.asc(), UserRoadmap.sort_order.asc())
+        .all()
+    )
+
+    started_at = user.created_at
+    total_estimated_minutes = 0
+
+    if roadmap_rows:
+        started_at = roadmap_rows[0].created_at or user.created_at
+        track = roadmap_rows[0].track
+        topic_ids = [row.topic_id for row in roadmap_rows]
+        assigned_lessons = (
+            db.query(Lesson)
+            .filter(Lesson.topic_id.in_(topic_ids))
+            .order_by(Lesson.id.asc())
+            .all()
+        )
+        total_estimated_minutes = sum(
+            lesson.estimated_minutes or 0
+            for lesson in assigned_lessons
+            if lesson_is_assigned(track, lesson.difficulty_tier)
+        )
+
+    daily_study_minutes = user.daily_study_minutes or DEFAULT_DAILY_STUDY_MINUTES
+    estimated_finish = None
+    if total_estimated_minutes > 0:
+        days_needed = max(1, ceil(total_estimated_minutes / daily_study_minutes))
+        estimated_finish = date.today() + timedelta(days=days_needed - 1)
+
+    return UserProfileResponse(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        role_id=user.role_id,
+        created_at=user.created_at,
+        started_at=started_at,
+        estimated_finish=estimated_finish,
+        total_estimated_minutes=total_estimated_minutes,
+        daily_study_minutes=daily_study_minutes,
+    )
 
 
 @router.post(
@@ -64,10 +124,25 @@ def login(
     )
 
 
-@router.get("/me", response_model=UserResponse)
-def get_user_profile(current_user: User = Depends(get_current_user)):
+@router.get("/me", response_model=UserProfileResponse)
+def get_user_profile(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
     """
     API này yêu cầu phải có Token hợp lệ.
     Nếu Token đúng, nó sẽ trả về thông tin của chính user đó.
     """
-    return current_user
+    return _build_user_profile_response(db, current_user)
+
+
+@router.patch("/me/study-settings", response_model=UserProfileResponse)
+def update_study_settings(
+    payload: StudySettingsUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    current_user.daily_study_minutes = payload.daily_study_minutes
+    db.add(current_user)
+    db.commit()
+    db.refresh(current_user)
+    return _build_user_profile_response(db, current_user)

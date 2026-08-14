@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, Boolean, Column, ForeignKey, Index, String
+from sqlalchemy import JSON, Boolean, Column, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.mysql import BIGINT
 
 from app.core.database import Base
@@ -24,6 +24,7 @@ class Lesson(Base):
     difficulty_tier = Column(
         String(20), nullable=False, comment="basic | intermediate | advanced"
     )
+    estimated_minutes = Column(Integer, nullable=True)
     theory_content = Column(JSON, nullable=True)  # NULL until lazily generated (C-1)
     quiz_content = Column(JSON, nullable=True)  # NULL until lazily generated (C-2)
     is_generated = Column(Boolean, nullable=False, server_default="0")

@@ -1,6 +1,7 @@
-from pydantic import BaseModel, EmailStr, Field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
+
+from pydantic import BaseModel, EmailStr, Field
 
 
 # 1. Base Schema: Chứa các trường chung nhất
@@ -31,6 +32,17 @@ class UserResponse(UserBase):
     # Cấu hình này giúp Pydantic đọc được dữ liệu từ SQLAlchemy Model
     class Config:
         from_attributes = True
+
+
+class UserProfileResponse(UserResponse):
+    started_at: datetime | None = None
+    estimated_finish: date | None = None
+    total_estimated_minutes: int = 0
+    daily_study_minutes: int = 120
+
+
+class StudySettingsUpdateRequest(BaseModel):
+    daily_study_minutes: int = Field(ge=60, le=360, multiple_of=60)
 
 
 # 5. Schema trả về từ login (token + user info)

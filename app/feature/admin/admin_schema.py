@@ -40,6 +40,32 @@ class Baseline(BaseModel):
         return self
 
 
+class SkillDefinition(BaseModel):
+    description: str = Field(min_length=1)
+    example_questions: list[str] = Field(default_factory=list)
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, v: str) -> str:
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("skill description is required")
+        return cleaned
+
+    @field_validator("example_questions")
+    @classmethod
+    def normalize_example_questions(cls, v: list[str]) -> list[str]:
+        cleaned = [q.strip() for q in v if q and q.strip()]
+        return cleaned[:2]
+
+
+class RoleSkillDefinitions(BaseModel):
+    D_doc: SkillDefinition
+    C_comm: SkillDefinition
+    T_trouble: SkillDefinition
+    G_custom: SkillDefinition
+
+
 # ─── Roles ───────────────────────────────────────────────────────────────────
 
 
@@ -47,34 +73,23 @@ class RoleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     job_description: str = Field(min_length=1)
     baseline: Baseline
-    g_skill_description: str = Field(min_length=1)
+    skill_definitions: RoleSkillDefinitions
     seed_tier_1: str = Field(min_length=1)
     seed_tier_2: str = Field(min_length=1)
-    example_question: list[str] | None = None
 
     @field_validator("baseline")
     @classmethod
     def baseline_sums_to_100(cls, v: Baseline) -> Baseline:
         return v.validate_sum()
 
-    @field_validator("example_question")
-    @classmethod
-    def normalize_example_question(cls, v: list[str] | None) -> list[str] | None:
-        if v is None:
-            return None
-        cleaned = [q.strip() for q in v if q and q.strip()]
-        # [] signals "clear" on PATCH; null signals "no change"
-        return cleaned[:2]
-
 
 class RoleUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     job_description: str | None = Field(default=None, min_length=1)
     baseline: Baseline | None = None
-    g_skill_description: str | None = Field(default=None, min_length=1)
+    skill_definitions: RoleSkillDefinitions | None = None
     seed_tier_1: str | None = Field(default=None, min_length=1)
     seed_tier_2: str | None = Field(default=None, min_length=1)
-    example_question: list[str] | None = None
     is_active: bool | None = None
 
     @field_validator("baseline")
@@ -84,25 +99,15 @@ class RoleUpdate(BaseModel):
             return v.validate_sum()
         return v
 
-    @field_validator("example_question")
-    @classmethod
-    def normalize_example_question(cls, v: list[str] | None) -> list[str] | None:
-        if v is None:
-            return None
-        cleaned = [q.strip() for q in v if q and q.strip()]
-        # [] signals "clear" on PATCH; null signals "no change"
-        return cleaned[:2]
-
 
 class RoleResponse(BaseModel):
     id: int
     name: str
     jobDescription: str
     baseline: Baseline
-    gSkillDefinition: str
+    skillDefinitions: RoleSkillDefinitions
     seedTier1: str
     seedTier2: str
-    exampleQuestion: list[str] | None = None
     isActive: bool
     createdBy: int | None = None
     activeLearnerCount: int = 0
@@ -145,7 +150,7 @@ class ResetLearnersResponse(BaseModel):
 
 class PreviewRequest(BaseModel):
     jobDescription: str
-    gSkillDefinition: str
+    skillDefinitions: RoleSkillDefinitions
 
 
 class PreviewResponse(BaseModel):

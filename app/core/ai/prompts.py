@@ -6,17 +6,37 @@ Do not modify the template text unless explicitly requested.
 
 NUM_PLACEMENT_QUESTIONS_PER_SKILL = 12
 SKILLS = ["D_doc", "C_comm", "T_trouble", "G_custom"]
+SKILL_TITLES = {
+    "D_doc": "Document",
+    "C_comm": "Communication",
+    "T_trouble": "Trouble",
+    "G_custom": "Custom",
+}
+
+
+def render_skill_definitions_block(
+    skill_definitions: dict[str, dict[str, str | list[str]]],
+) -> str:
+    lines = ["[SKILL DEFINITIONS]"]
+    for skill in SKILLS:
+        item = skill_definitions.get(skill) or {}
+        description = str(item.get("description", "")).strip()
+        lines.append(f"- {skill} ({SKILL_TITLES[skill]}): {description}")
+    return "\n".join(lines)
+
+
+def get_skill_description(
+    skill_definitions: dict[str, dict[str, str | list[str]]], skill: str
+) -> str:
+    item = skill_definitions.get(skill) or {}
+    return str(item.get("description", "")).strip()
 
 PROMPT_A_TEMPLATE = """[SYSTEM INSTRUCTION]
 You are an expert IT English Assessment Architect.
 Generate EXACTLY {num_questions} multiple-choice questions for the "{role}" role,
 testing the "{target_skill}" skill.
 
-[SKILL DEFINITIONS]
-- D_doc (Document): Reading/writing technical docs, BRD, SRS, User Stories, Acceptance Criteria, Meeting Minutes.
-- C_comm (Communication): English communication, vocabulary, phrasing, presentation, emails, professional interactions.
-- T_trouble (Trouble): Problem solving, conflict resolution, scope creep, dealing with changing requirements, workarounds.
-- G_custom: {g_skill_description}
+{skill_definitions_block}
 
 [OUTPUT CONSTRAINT]
 - Output ONLY a raw, valid JSON array of arrays.
@@ -27,7 +47,7 @@ testing the "{target_skill}" skill.
 - Role: "{role}"
 - Job Description: "{job_description}"
 - Target Skill: "{target_skill}"  (one of "D_doc" | "C_comm" | "T_trouble" | "G_custom")
-- G_custom Description: "{g_skill_description}"
+- Target Skill Description: "{target_skill_description}"
 - Seed Tier 1 Data (Basic): "{seed_tier_1}"
 - Seed Tier 2 Data (Advanced): "{seed_tier_2}"
 - Questions: {num_questions} per call (distribute as 3 questions per difficulty band)
@@ -60,7 +80,7 @@ def build_prompt_a(
     role: str,
     job_description: str,
     target_skill: str,
-    g_skill_description: str,
+    skill_definitions: dict[str, dict[str, str | list[str]]],
     seed_tier_1: str,
     seed_tier_2: str,
     num_questions: int = NUM_PLACEMENT_QUESTIONS_PER_SKILL,
@@ -71,7 +91,8 @@ def build_prompt_a(
         role=role,
         job_description=job_description,
         target_skill=target_skill,
-        g_skill_description=g_skill_description,
+        skill_definitions_block=render_skill_definitions_block(skill_definitions),
+        target_skill_description=get_skill_description(skill_definitions, target_skill),
         seed_tier_1=seed_tier_1,
         seed_tier_2=seed_tier_2,
     )
@@ -96,11 +117,7 @@ PROMPT_B1_TEMPLATE = """[SYSTEM INSTRUCTION]
 You are an expert IT Curriculum Architect.
 Design a course outline of EXACTLY {num_topics} topics for the "{role}" role.
 
-[SKILL DEFINITIONS]
-- D_doc (Document): Reading/writing technical docs, BRD, SRS, User Stories, Acceptance Criteria, Meeting Minutes.
-- C_comm (Communication): English communication, vocabulary, phrasing, presentation, emails, professional interactions.
-- T_trouble (Trouble): Problem solving, conflict resolution, scope creep, dealing with changing requirements, workarounds.
-- G_custom: {g_skill_description}
+{skill_definitions_block}
 
 [REQUIRED EXACT DISTRIBUTION]
 You must generate EXACTLY {num_topics} topics total. To ensure perfect counting, generate them sequentially in these exact groups:
@@ -145,7 +162,7 @@ def build_prompt_b1(
     *,
     role: str,
     job_description: str,
-    g_skill_description: str,
+    skill_definitions: dict[str, dict[str, str | list[str]]],
     seed_tier_1: str,
     seed_tier_2: str,
     baseline: dict[str, int],
@@ -174,7 +191,7 @@ def build_prompt_b1(
         num_topics=num_topics,
         role=role,
         job_description=job_description,
-        g_skill_description=g_skill_description,
+        skill_definitions_block=render_skill_definitions_block(skill_definitions),
         seed_tier_1=seed_tier_1,
         seed_tier_2=seed_tier_2,
         d=d,
@@ -211,11 +228,7 @@ PROMPT_B2_TEMPLATE = """[SYSTEM INSTRUCTION]
 You are an expert IT English Curriculum Designer.
 Break down the topic "{topic_name}" into EXACTLY {num_lessons} lesson titles for a "{role}" professional.
 
-[SKILL DEFINITIONS]
-- D_doc (Document): Reading/writing technical docs, BRD, SRS, User Stories, Acceptance Criteria, Meeting Minutes.
-- C_comm (Communication): English communication, vocabulary, phrasing, presentation, emails, professional interactions.
-- T_trouble (Trouble): Problem solving, conflict resolution, scope creep, dealing with changing requirements, workarounds.
-- G_custom: {g_skill_description}
+{skill_definitions_block}
 
 [OUTPUT CONSTRAINT]
 - Output ONLY a raw, valid JSON array of arrays.
@@ -258,7 +271,7 @@ def build_prompt_b2(
     role: str,
     topic_name: str,
     topic_skill: str,
-    g_skill_description: str,
+    skill_definitions: dict[str, dict[str, str | list[str]]],
     num_lessons: int = NUM_LESSONS_PER_TOPIC,
 ) -> str:
     """Build the Prompt B-2 payload (6 lesson shells for one topic)."""
@@ -266,7 +279,7 @@ def build_prompt_b2(
         role=role,
         topic_name=topic_name,
         topic_skill=topic_skill,
-        g_skill_description=g_skill_description,
+        skill_definitions_block=render_skill_definitions_block(skill_definitions),
         num_lessons=num_lessons,
         num_basic=NUM_BASIC_PER_TOPIC,
         num_inter=NUM_INTERMEDIATE_PER_TOPIC,
@@ -294,11 +307,7 @@ PROMPT_C1_TEMPLATE = """[SYSTEM INSTRUCTION]
 You are an expert IT English Instructor and Curriculum Architect specialized in software development workplace communication.
 Write the complete teaching content (Theory) for ONE lesson. Output a raw, valid JSON array.
 
-[SKILL DEFINITIONS]
-- D_doc (Document): Reading/writing technical docs, BRD, SRS, User Stories, Acceptance Criteria, Meeting Minutes.
-- C_comm (Communication): English communication, vocabulary, phrasing, presentation, emails, professional interactions.
-- T_trouble (Trouble): Problem solving, conflict resolution, scope creep, dealing with changing requirements, workarounds.
-- G_custom: {g_skill_description}
+{skill_definitions_block}
 
 [OUTPUT CONSTRAINT]
 - Output ONLY a raw, valid JSON array containing EXACTLY 8 inner arrays.
@@ -352,7 +361,7 @@ def build_prompt_c1(
     lesson_title: str,
     primary_skill: str,
     difficulty_tier: str,
-    g_skill_description: str,
+    skill_definitions: dict[str, dict[str, str | list[str]]],
     num_vocab: int = NUM_VOCAB,
     num_patterns: int = NUM_PATTERNS,
 ) -> str:
@@ -364,7 +373,7 @@ def build_prompt_c1(
         lesson_title=lesson_title,
         primary_skill=primary_skill,
         difficulty_tier=difficulty_tier,
-        g_skill_description=g_skill_description,
+        skill_definitions_block=render_skill_definitions_block(skill_definitions),
         num_vocab=num_vocab,
         num_patterns=num_patterns,
     )
@@ -405,7 +414,7 @@ def build_prompt_c2(
     lesson_title: str,
     primary_skill: str,
     difficulty_tier: str,
-    g_skill_description: str,
+    skill_definitions: dict[str, dict[str, str | list[str]]],
     theory_content: str,
     num_per_type: int = NUM_PER_TYPE,
     example: str = C2_EXAMPLE,
@@ -421,7 +430,7 @@ def build_prompt_c2(
         lesson_title=lesson_title,
         primary_skill=primary_skill,
         difficulty_tier=difficulty_tier,
-        g_skill_description=g_skill_description,
+        skill_definitions_block=render_skill_definitions_block(skill_definitions),
         theory_content=theory_content,
         num_per_type=num_per_type,
         num_total=num_per_type * 3,
@@ -449,11 +458,7 @@ Every question MUST be grounded ONLY in the provided Reference Theory Content: e
 option, and the correct answer must be drawn from the theory itself. Never invent facts, terms,
 options, or procedures that are not present in the theory.
 
-[SKILL DEFINITIONS]
-- D_doc (Document): Reading/writing technical docs, BRD, SRS, User Stories, Acceptance Criteria, Meeting Minutes.
-- C_comm (Communication): English communication, vocabulary, phrasing, presentation, emails, professional interactions.
-- T_trouble (Trouble): Problem solving, conflict resolution, scope creep, dealing with changing requirements, workarounds.
-- G_custom: {g_skill_description}
+{skill_definitions_block}
 
 [OUTPUT CONSTRAINT]
 - Output ONLY a raw, valid JSON object with exactly 3 keys: "fill_blank", "multi_select", "ordering".

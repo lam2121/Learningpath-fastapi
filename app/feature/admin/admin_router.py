@@ -132,7 +132,7 @@ def generation_status(role_id: int, db: Session = Depends(get_db)):
 @router.post("/preview", response_model=PreviewResponse)
 def preview_generation(payload: PreviewRequest):
     return admin_service.preview_generation(
-        payload.jobDescription, payload.gSkillDefinition
+        payload.jobDescription, payload.skillDefinitions
     )
 
 

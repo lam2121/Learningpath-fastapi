@@ -38,12 +38,19 @@ TRACK_TIERS = {
 NUM_ROADMAP_TOPICS = 8
 
 
+def lesson_is_assigned(track: str, difficulty_tier: str) -> bool:
+    """Whether a lesson tier is part of the learner's assigned track."""
+    return difficulty_tier in TRACK_TIERS[track]
+
+
 def assigned_lessons(selected_topics, lesson_shells, track: str) -> dict[str, int]:
     """Lessons actually assigned for this track, counted per skill (lesson-tag level)."""
     topic_ids = {t.id for t in selected_topics}
     counts = {s: 0 for s in SKILLS}
     for shell in lesson_shells:
-        if shell.topic_id in topic_ids and shell.difficulty_tier in TRACK_TIERS[track]:
+        if shell.topic_id in topic_ids and lesson_is_assigned(
+            track, shell.difficulty_tier
+        ):
             counts[shell.primary_skill] += 1
     return counts
 
@@ -90,7 +97,7 @@ def select_roadmap(
             1
             for shell in lesson_shells
             if shell.topic_id == topic.id
-            and shell.difficulty_tier in TRACK_TIERS[track]
+            and lesson_is_assigned(track, shell.difficulty_tier)
             and shell.primary_skill == skill
         )
 

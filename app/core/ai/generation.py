@@ -25,6 +25,7 @@ from app.core.ai.gemini import (
     LLMResponse,
     assert_generation_enabled,
 )
+from app.core.lesson_duration import estimate_lesson_duration
 from app.core.ai.prompts import (
     SKILLS,
     build_prompt_a,
@@ -589,6 +590,7 @@ def _insert_lesson_shells(db: Session, topic_id: int, rows: list) -> int:
                 title=title,
                 primary_skill=skill,
                 difficulty_tier=tier,
+                estimated_minutes=None,
                 theory_content=None,
                 quiz_content=None,
                 is_generated=False,
@@ -1043,6 +1045,7 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
             if force:
                 lesson.theory_content = None
                 lesson.quiz_content = None
+                lesson.estimated_minutes = None
                 lesson.is_generated = False
                 db.commit()
 
@@ -1119,6 +1122,7 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
 
             lesson.theory_content = theory
             lesson.quiz_content = quiz
+            lesson.estimated_minutes = estimate_lesson_duration(theory, quiz)
             lesson.is_generated = True
             db.commit()
 

@@ -7,12 +7,7 @@ and Prompt B-2 gate (lesson shells).
 from typing import Any
 
 NUM_PLACEMENT_QUESTIONS_PER_SKILL = 12
-BANDS = [
-    (1, 2),
-    (3, 4),
-    (5, 6),
-    (7, 8),
-]
+VALID_LEVELS = ["Easy", "Medium", "Hard", "Expert"]
 VALID_SKILLS = {"D_doc", "C_comm", "T_trouble", "G_custom"}
 VALID_ANSWERS = {"A", "B", "C", "D"}
 
@@ -38,12 +33,12 @@ TIER_SPLIT_MAX = 12
 SOFT_BAND_THRESHOLD = 8
 
 
-def band_of(level: int) -> int:
-    """Return 1-based band index for a level, or -1 if out of 1-8 range."""
-    for i, (lo, hi) in enumerate(BANDS, start=1):
-        if lo <= level <= hi:
-            return i
-    return -1
+def band_of(level: str) -> int:
+    """Return 1-based band index for a level string, or -1 if invalid."""
+    try:
+        return VALID_LEVELS.index(level) + 1
+    except ValueError:
+        return -1
 
 
 def band_distribution(rows: list[list[Any]]) -> list[int]:
@@ -102,12 +97,10 @@ def validate_placement_block(rows: Any, target_skill: str) -> dict:
                 f"Row {i}: skill '{skill}' does not match target '{target_skill}'"
             )
 
-        if (
-            not isinstance(level, int)
-            or isinstance(level, bool)
-            or not (1 <= level <= 8)
-        ):
-            errors.append(f"Row {i}: level '{level}' must be an integer 1-8")
+        if not isinstance(level, str) or level not in VALID_LEVELS:
+            errors.append(
+                f"Row {i}: level '{level}' must be one of {VALID_LEVELS}"
+            )
 
         if not isinstance(text, str) or not text.strip():
             errors.append(f"Row {i}: question text is empty")

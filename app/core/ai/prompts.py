@@ -35,22 +35,21 @@ testing the "{target_skill}" skill.
 [REQUIREMENTS]
 1. Each inner array has EXACTLY 5 elements:
    Index 0: Target skill code (must be "{target_skill}")
-   Index 1: Difficulty level (integer 1-8)
+   Index 1: Difficulty level (must be one of four: Easy, Medium, Hard, Expert)
    Index 2: Question text (max 25 words, authentic IT scenario)
    Index 3: "OptionA|OptionB|OptionC|OptionD" (pipe-separated)
    Index 4: Correct answer letter ("A", "B", "C", or "D")
 
 2. Distribute the 12 questions across **4 difficulty bands** (3 questions per band):
-   Band 1 = levels 1-2 (Tier 1 vocabulary), Band 2 = levels 3-4,
-   Band 3 = levels 5-6 (Tier 2 vocabulary), Band 4 = levels 7-8.
-   Within a band, spread the 3 questions across its 2 levels (e.g., 2 in one level, 1 in the other).
+   Band 1 = Easy (Tier 1 vocabulary), Band 2 = Medium,
+   Band 3 = Hard (Tier 2 vocabulary), Band 4 = Expert.
 
 3. CRITICAL: Use single quotes (') inside strings, never unescaped double quotes.
 
 [EXAMPLE]
 [
-  ["{target_skill}", 1, "What does SRS stand for?", "Software Requirement Specification|System Resource Summary|Software Rate Standard|System Renewal Section", "A"],
-  ["{target_skill}", 5, "Which phrase diplomatically rejects scope creep?", "No we cannot|That impacts our timeline, let us review|Stop asking|I will add it now", "B"]
+  ["{target_skill}", "Easy", "What does SRS stand for?", "Software Requirement Specification|System Resource Summary|Software Rate Standard|System Renewal Section", "A"],
+  ["{target_skill}", "Hard", "Which phrase diplomatically rejects scope creep?", "No we cannot|That impacts our timeline, let us review|Stop asking|I will add it now", "B"]
 ]
 """
 

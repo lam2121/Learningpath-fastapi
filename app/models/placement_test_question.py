@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import Column, DateTime, ForeignKey, Index, String
 from sqlalchemy.dialects.mysql import BIGINT, LONGTEXT
 
 from app.core.database import Base
@@ -22,7 +22,7 @@ class PlacementTestQuestion(Base):
         nullable=False,
         comment="v2.1 tag: D_doc | C_comm | T_trouble | G_custom",
     )  # [cite: 2]
-    level = Column(Integer, nullable=False, comment="1-8")  # [cite: 2]
+    level = Column(String(45), nullable=False, comment="Easy|Medium|Hard|Expert")  # [cite: 2]
     quiz_type_id = Column(
         BIGINT,
         ForeignKey("quiz_type.id", ondelete="NO ACTION", onupdate="NO ACTION"),

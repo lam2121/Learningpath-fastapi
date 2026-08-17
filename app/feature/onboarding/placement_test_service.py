@@ -211,7 +211,60 @@ def complete_placement_test(
     # answers. Silently skips when the role has no topics yet (B1/B2 not run);
     # a later recompute (POST /onboarding/roadmap/select) fills it.
     build_and_save_roadmap(db, user_id)
+    
+    # Initialize Radar Score from placement test
+    _initialize_radar_score(db, user_id)
+    
     return True
+
+
+def _initialize_radar_score(db: Session, user_id: int):
+    """
+    Computes and persists the initial radar score based on the placement test 
+    weighted accuracy, and saves it into UserRadarScore.
+    """
+    from app.models.user_radar_score import UserRadarScore
+
+    # Delete any existing record for this user
+    db.query(UserRadarScore).filter(UserRadarScore.user_id == user_id).delete()
+
+    rows = _load_placement_answer_rows(db, user_id)
+    if not rows:
+        return
+
+    answers, _, _ = _parse_answer_rows(rows)
+
+    DIFFICULTY_WEIGHT = {
+        "Easy": 1,
+        "Medium": 2,
+        "Hard": 3,
+        "Expert": 4,
+    }
+    MAX_WEIGHT_PER_SKILL = 30
+    INITIAL_RADAR_SCALE = 0.85
+
+    earned = {s: 0.0 for s in SKILLS}
+    for ans in answers:
+        if ans.is_correct:
+            w = DIFFICULTY_WEIGHT.get(ans.level, 1)
+            if ans.axis in earned:
+                earned[ans.axis] += w
+                
+    start_vector = {}
+    for skill in SKILLS:
+        weighted_accuracy = (earned[skill] / MAX_WEIGHT_PER_SKILL) * 100
+        start_vector[skill] = weighted_accuracy * INITIAL_RADAR_SCALE
+        
+    prev_stack = {s: [] for s in SKILLS}
+    
+    radar = UserRadarScore(
+        user_id=user_id,
+        start_vector=start_vector,
+        current_vector=start_vector,
+        prev_stack=prev_stack,
+    )
+    db.add(radar)
+    db.commit()
 
 
 def _load_placement_answer_rows(db: Session, user_id: int):
@@ -282,7 +335,7 @@ def _parse_answer_rows(rows) -> tuple[list[PlacementAnswerDetail], dict, dict]:
         answer = PlacementAnswerDetail(
             question_id=question.id,
             axis=question.skill,  # authoritative skill tag (D_doc, ...)
-            level=question.level,
+            level=user_answer.get("difficulty", question.level),
             statement=statement,
             options=options,
             correct_answer=correct_answer,
@@ -385,6 +438,17 @@ def get_placement_test_result(db: Session, user_id: int) -> PlacementResultRespo
         skill: round(score * 100) for skill, score in skill_scores_fraction.items()
     }
 
+    # Load UserRadarScore if it exists
+    from app.models.user_radar_score import UserRadarScore
+    radar_score_record = db.query(UserRadarScore).filter(UserRadarScore.user_id == user_id).first()
+    radar_score = None
+    if radar_score_record:
+        radar_score = {
+            "start_vector": radar_score_record.start_vector,
+            "current_vector": radar_score_record.current_vector,
+            "prev_stack": radar_score_record.prev_stack,
+        }
+
     return PlacementResultResponse(
         learning_status=user.learning_status,
         total_questions=total_questions,
@@ -397,6 +461,7 @@ def get_placement_test_result(db: Session, user_id: int) -> PlacementResultRespo
         role_name=role_name,
         baseline=baseline,
         answers=answers,
+        radar_score=radar_score,
     )
 
 

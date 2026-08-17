@@ -5,7 +5,12 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import app_config
-from app.core.roadmap import SKILLS, assigned_lessons, select_roadmap
+from app.core.roadmap import (
+    SKILLS,
+    assigned_lessons,
+    lesson_is_assigned,
+    select_roadmap,
+)
 from app.feature.onboarding.placement_evaluator import classify_user
 from app.feature.onboarding.placement_test_schema import (
     PlacementAnswerDetail,
@@ -604,33 +609,44 @@ def get_user_roadmap(db: Session, user_id: int) -> RoadmapResponse:
     )
     lessons_by_topic: dict[int, list[Lesson]] = {}
     for lesson in lessons:
-        lessons_by_topic.setdefault(lesson.topic_id, []).append(lesson)
+        if lesson_is_assigned(track, lesson.difficulty_tier):
+            lessons_by_topic.setdefault(lesson.topic_id, []).append(lesson)
 
-    return RoadmapResponse(
-        track=track,
-        topics=[
+    roadmap_topics: list[RoadmapTopicResponse] = []
+    total_estimated_minutes = 0
+    for topic in topics:
+        topic_lessons = lessons_by_topic.get(topic.id, [])
+        topic_minutes = sum((lesson.estimated_minutes or 0) for lesson in topic_lessons)
+        total_estimated_minutes += topic_minutes
+        roadmap_topics.append(
             RoadmapTopicResponse(
                 id=topic.id,
                 name=topic.name,
                 primary_skill=topic.primary_skill,
                 seed_tier=topic.seed_tier,
-                sort_order=topic.sort_order,
+                sort_order=order[topic.id] + 1,
+                total_estimated_minutes=topic_minutes,
                 lessons=[
                     RoadmapLessonResponse(
                         id=lesson.id,
                         title=lesson.title,
                         primary_skill=lesson.primary_skill,
                         difficulty_tier=lesson.difficulty_tier,
+                        estimated_minutes=lesson.estimated_minutes,
                         is_generated=bool(lesson.is_generated),
                         theory_content=lesson.theory_content,
                         quiz_content=lesson.quiz_content,
                     )
-                    for lesson in lessons_by_topic.get(topic.id, [])
+                    for lesson in topic_lessons
                 ],
             )
-            for topic in topics
-        ],
+        )
+
+    return RoadmapResponse(
+        track=track,
+        topics=roadmap_topics,
         assigned_lessons=assigned_lessons(topics, lessons, track),
+        total_estimated_minutes=total_estimated_minutes,
     )
 
 

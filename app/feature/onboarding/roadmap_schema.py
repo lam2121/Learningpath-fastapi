@@ -12,6 +12,7 @@ class RoadmapLessonResponse(BaseModel):
     title: str
     primary_skill: str
     difficulty_tier: str
+    estimated_minutes: int | None = None
     is_generated: bool
     theory_content: Any | None = None
     quiz_content: Any | None = None
@@ -23,6 +24,7 @@ class RoadmapTopicResponse(BaseModel):
     primary_skill: str
     seed_tier: str
     sort_order: int
+    total_estimated_minutes: int = 0
     lessons: list[RoadmapLessonResponse] = []
 
 
@@ -30,6 +32,7 @@ class RoadmapResponse(BaseModel):
     track: str
     topics: list[RoadmapTopicResponse]
     assigned_lessons: dict[str, int] = {}
+    total_estimated_minutes: int = 0
 
 
 class SkillOverrideRequest(BaseModel):

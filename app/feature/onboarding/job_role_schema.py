@@ -1,6 +1,6 @@
-from typing import Any
-
 from pydantic import BaseModel
+
+from app.feature.admin.admin_schema import RoleSkillDefinitions
 
 
 class JobRoleResponse(BaseModel):
@@ -8,8 +8,7 @@ class JobRoleResponse(BaseModel):
     name: str
     job_description: str | None = None
     baseline: dict | None = None
-    g_skill_description: str | None = None
-    example_question: Any | None = None
+    skill_definitions: RoleSkillDefinitions | None = None
     is_active: bool = True
 
     class Config:

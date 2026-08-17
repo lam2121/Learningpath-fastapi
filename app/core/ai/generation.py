@@ -161,7 +161,7 @@ def _record_rejected(
 def _insert_questions(db: Session, role_id: int, skill: str, rows: list) -> int:
     now = datetime.now(timezone.utc)
     for row in rows:
-        _, level, statement, options_str, answer_letter = row
+        _, level, statement, options_str, answer_letter, expanded_skill = row
         options = [str(o).strip() for o in options_str.split("|")]
         idx = LETTER_TO_INDEX.get(answer_letter)
         correct_answer = options[idx] if idx is not None and idx < len(options) else ""
@@ -176,6 +176,7 @@ def _insert_questions(db: Session, role_id: int, skill: str, rows: list) -> int:
                 created_at=now,
                 skill=skill,
                 level=level,
+                expanded_skill=expanded_skill,
                 quiz_type_id=QUIZ_TYPE_ID,
                 job_role_id=role_id,
             )

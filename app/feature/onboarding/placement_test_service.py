@@ -42,14 +42,14 @@ SKILL_TAG_TO_SHORT = {
 # level column stores plain strings: 'Easy' | 'Medium' | 'Hard' | 'Expert'
 
 # Difficulty-weighted scoring (spec §3)
-# Each skill: 3×Easy + 3×Medium + 3×Hard + 3×Expert = 3+6+9+12 = 30
+# Each skill: 4×Easy (weight 1) + 4×Medium (weight 2) + 4×Hard (weight 3) = 4 + 8 + 12 = 24
 DIFFICULTY_WEIGHT: dict[str, int] = {
     "Easy": 1,
     "Medium": 2,
     "Hard": 3,
     "Expert": 4,
 }
-MAX_SKILL_WEIGHT = 30  # 3×1 + 3×2 + 3×3 + 3×4
+MAX_SKILL_WEIGHT = 24  # 4×1 + 4×2 + 4×3
 
 
 def fetch_questions_by_role(
@@ -107,6 +107,7 @@ def fetch_questions_by_role(
                 statement=statement,
                 options=options,
                 correct_answer=correct_answer,
+                expanded_skill=record.expanded_skill,
             )
         )
 
@@ -350,6 +351,7 @@ def _parse_answer_rows(rows) -> tuple[list[PlacementAnswerDetail], dict, dict]:
             selected_id=user_answer.get("selected_id", ""),
             selected_text=user_answer.get("selected_text"),
             is_correct=user_answer.get("is_correct", False),
+            expanded_skill=getattr(question, "expanded_skill", None),
         )
         answers.append(answer)
 
@@ -419,7 +421,7 @@ def get_placement_test_result(db: Session, user_id: int) -> PlacementResultRespo
     answers, skill_correct, skill_total, skill_earned_weight = _parse_answer_rows(rows)
 
     # Difficulty-weighted accuracy per skill (spec §3)
-    # Score = earned_weight / MAX_SKILL_WEIGHT (30) × 100
+    # Score = earned_weight / MAX_SKILL_WEIGHT (24) × 100
     skill_scores_fraction: dict[str, float] = {
         skill: skill_earned_weight[skill] / MAX_SKILL_WEIGHT for skill in SKILLS
     }

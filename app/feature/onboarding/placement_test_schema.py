@@ -8,6 +8,7 @@ class PlacementTestQuestionResponse(BaseModel):
     statement: str
     options: list[str]  # 4 plain-text options
     correct_answer: str  # exact text of the correct option
+    expanded_skill: str | None = None  # 'Context_layer' | 'Language_layer'
 
     class Config:
         from_attributes = True
@@ -48,6 +49,7 @@ class PlacementAnswerDetail(BaseModel):
     selected_id: str  # letter: 'a' | 'b' | 'c' | 'd'
     selected_text: str | None = None  # exact text of the option the user picked
     is_correct: bool
+    expanded_skill: str | None = None  # 'Context_layer' | 'Language_layer'
 
 
 class RadarScoreSchema(BaseModel):

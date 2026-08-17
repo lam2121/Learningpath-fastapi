@@ -102,7 +102,7 @@ testing the "{target_skill}" skill.
    Index 3: "OptionA|OptionB|OptionC|OptionD" (pipe-separated)
    Index 4: Correct answer letter ("A", "B", "C", or "D")
    Index 5: Must be Context layer or Language layer
-2. Distribute the 12 questions across **4 difficulty bands** (3 questions per band):
+2. Distribute the {num_questions} questions across **3 difficulty bands** (4 questions per band):
    Band 1 = Easy (Tier 1 vocabulary), Band 2 = Medium,
    Band 3 = Hard (Tier 2 vocabulary).
 

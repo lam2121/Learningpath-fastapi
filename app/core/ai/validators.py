@@ -9,6 +9,7 @@ from typing import Any
 NUM_PLACEMENT_QUESTIONS_PER_SKILL = 12
 VALID_LEVELS = ["Easy", "Medium", "Hard", "Expert"]
 VALID_SKILLS = {"D_doc", "C_comm", "T_trouble", "G_custom"}
+VALID_EXPANDED_SKILLS = {"Context_layer", "Language_layer"}
 VALID_ANSWERS = {"A", "B", "C", "D"}
 
 # Generator B-1 / B-2 constants
@@ -54,12 +55,12 @@ def band_distribution(rows: list[list[Any]]) -> list[int]:
 
 def soft_band_score(rows: list[list[Any]]) -> int:
     """
-    Soft check: for each band contracted to hold 3 questions, count the
-    questions that are correctly placed (min(count, 3)). Sum over bands.
+    Soft check: for each band contracted to hold 4 questions, count the
+    questions that are correctly placed (min(count, 4)). Sum over bands.
     >= SOFT_BAND_THRESHOLD (8) passes; otherwise a targeted re-roll is triggered.
     """
     counts = band_distribution(rows)
-    return sum(min(c, 3) for c in counts)
+    return sum(min(c, 4) for c in counts)
 
 
 def validate_placement_block(rows: Any, target_skill: str) -> dict:
@@ -86,11 +87,11 @@ def validate_placement_block(rows: Any, target_skill: str) -> dict:
         )
 
     for i, row in enumerate(rows):
-        if not isinstance(row, list) or len(row) != 5:
-            errors.append(f"Row {i} must have exactly 5 elements")
+        if not isinstance(row, list) or len(row) != 6:
+            errors.append(f"Row {i} must have exactly 6 elements")
             continue
 
-        skill, level, text, options, answer = row
+        skill, level, text, options, answer, expanded_skill = row
 
         if skill != target_skill:
             errors.append(
@@ -112,6 +113,11 @@ def validate_placement_block(rows: Any, target_skill: str) -> dict:
 
         if answer not in VALID_ANSWERS:
             errors.append(f"Row {i}: correct answer '{answer}' must be one of A/B/C/D")
+
+        if not isinstance(expanded_skill, str) or expanded_skill not in VALID_EXPANDED_SKILLS:
+            errors.append(
+                f"Row {i}: expanded_skill '{expanded_skill}' must be one of {VALID_EXPANDED_SKILLS}"
+            )
 
     if not errors:
         score = soft_band_score(rows)

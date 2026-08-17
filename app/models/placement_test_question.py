@@ -23,6 +23,11 @@ class PlacementTestQuestion(Base):
         comment="v2.1 tag: D_doc | C_comm | T_trouble | G_custom",
     )  # [cite: 2]
     level = Column(String(45), nullable=False, comment="Easy|Medium|Hard|Expert")  # [cite: 2]
+    expanded_skill = Column(
+        String(45),
+        nullable=True,
+        comment="Context_layer|Language_layer",
+    )  # [cite: 2]
     quiz_type_id = Column(
         BIGINT,
         ForeignKey("quiz_type.id", ondelete="NO ACTION", onupdate="NO ACTION"),

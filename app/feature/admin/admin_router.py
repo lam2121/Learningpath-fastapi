@@ -7,6 +7,7 @@ from app.feature.admin.admin_schema import (
     CostDashboardData,
     DashboardData,
     GenerateResponse,
+    GenerationSummaryResponse,
     GenerationStatusResponse,
     KillSwitchState,
     KillSwitchUpdate,
@@ -127,6 +128,13 @@ def reset_role_learners(role_id: int, db: Session = Depends(get_db)):
 )
 def generation_status(role_id: int, db: Session = Depends(get_db)):
     return admin_service.get_generation_status(db, role_id)
+
+
+@router.get(
+    "/roles/{role_id}/generation-summary", response_model=GenerationSummaryResponse
+)
+def generation_summary(role_id: int, db: Session = Depends(get_db)):
+    return admin_service.get_generation_summary(db, role_id)
 
 
 @router.post("/preview", response_model=PreviewResponse)

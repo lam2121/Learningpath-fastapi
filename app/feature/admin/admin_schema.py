@@ -111,9 +111,12 @@ class RoleResponse(BaseModel):
     isActive: bool
     createdBy: int | None = None
     activeLearnerCount: int = 0
+    placementQuestionsCount: int = 0
     topicsCount: int = 0
     lessonsCount: int = 0
     generationStatus: str | None = None
+    placementGenerationStatus: str | None = None
+    courseGenerationStatus: str | None = None
 
 
 # ─── Generation ─────────────────────────────────────────────────────────────
@@ -132,6 +135,55 @@ class GenerationStatusResponse(BaseModel):
     startedAt: datetime | None = None
     finishedAt: datetime | None = None
     errorMessage: str | None = None
+
+
+class GenerationActiveJobResponse(BaseModel):
+    workflow: str | None = None
+    status: str | None = None
+    step: str | None = None
+    startedAt: datetime | None = None
+    finishedAt: datetime | None = None
+
+
+class PlacementGenerationSummaryResponse(BaseModel):
+    questionCount: int
+    targetCount: int
+    lastStatus: str
+    lastStartedAt: datetime | None = None
+    lastFinishedAt: datetime | None = None
+    lastErrorMessage: str | None = None
+
+
+class CourseGenerationSummaryResponse(BaseModel):
+    topicsCount: int
+    targetTopics: int
+    lessonsCount: int
+    targetLessons: int
+    currentStep: str | None = None
+    lastStatus: str
+    lastStartedAt: datetime | None = None
+    lastFinishedAt: datetime | None = None
+    lastErrorMessage: str | None = None
+    stepB1Count: int = 0
+    stepB1Errors: int = 0
+    stepB2Count: int = 0
+    stepB2Errors: int = 0
+
+
+class GenerationBlockersResponse(BaseModel):
+    killSwitchOn: bool
+    killSwitchReason: str | None = None
+    activeLearnerCount: int
+    requiresLearnerResetForPlacement: bool = False
+    requiresLearnerResetForCourse: bool = False
+
+
+class GenerationSummaryResponse(BaseModel):
+    roleId: int
+    activeJob: GenerationActiveJobResponse
+    placement: PlacementGenerationSummaryResponse
+    course: CourseGenerationSummaryResponse
+    blockers: GenerationBlockersResponse
 
 
 class GenerateResponse(BaseModel):

@@ -191,7 +191,7 @@ def _load_providers() -> list[ProviderConfig]:
             "groq",
             "https://api.groq.com/openai/v1",
             app_config.Groq,
-            "llama-3.3-70b-versatile",
+            "openai/gpt-oss-120b",
         ),
         (
             "openrouter",
@@ -287,7 +287,6 @@ class GeminiClientPool:
             "temperature": temperature,
             "top_p": top_p,
             "max_tokens": max_output_tokens,
-            "response_format": {"type": "json_object"},
         }
         headers = {
             "Authorization": f"Bearer {provider.api_key}",

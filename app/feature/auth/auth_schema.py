@@ -34,11 +34,20 @@ class UserResponse(UserBase):
         from_attributes = True
 
 
+class StudyHistoryEntryResponse(BaseModel):
+    studied_on: date
+    minutes: int = 0
+
+
 class UserProfileResponse(UserResponse):
     started_at: datetime | None = None
     estimated_finish: date | None = None
     total_estimated_minutes: int = 0
     daily_study_minutes: int = 120
+    total_studied_minutes: int = 0
+    study_history: list[StudyHistoryEntryResponse] = []
+    initial_skill_scores: dict[str, int] | None = None
+    current_skill_scores: dict[str, int] | None = None
 
 
 class StudySettingsUpdateRequest(BaseModel):

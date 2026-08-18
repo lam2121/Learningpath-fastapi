@@ -18,10 +18,105 @@ from app.feature.auth.auth_schema import (
 )
 from app.models.lesson import Lesson
 from app.models.user import User
+from app.models.user_course import UserCourse
+from app.models.user_course_skill_vector import UserCourseSkillVector
+from app.models.user_lesson import UserLesson
 from app.models.user_roadmap import UserRoadmap
 
 router = APIRouter()
 DEFAULT_DAILY_STUDY_MINUTES = 120
+SKILL_KEYS = ("D_doc", "C_comm", "T_trouble", "G_custom")
+
+
+def _coerce_skill_percent(value: object) -> int:
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return 0
+
+    if numeric_value <= 1:
+        numeric_value *= 100
+
+    return max(0, min(100, round(numeric_value)))
+
+
+def _normalize_skill_vector(value: object | None) -> dict[str, int] | None:
+    if value is None:
+        return None
+
+    if isinstance(value, dict):
+        if not any(skill in value for skill in SKILL_KEYS):
+            return None
+        return {
+            skill: _coerce_skill_percent(value.get(skill, 0))
+            for skill in SKILL_KEYS
+        }
+
+    if isinstance(value, (list, tuple)):
+        return {
+            skill: _coerce_skill_percent(value[index]) if index < len(value) else 0
+            for index, skill in enumerate(SKILL_KEYS)
+        }
+
+    return None
+
+
+def _build_skill_score_snapshots(
+    db: Session,
+    user_id: int,
+) -> tuple[dict[str, int] | None, dict[str, int] | None]:
+    vector_row = (
+        db.query(UserCourseSkillVector)
+        .join(UserCourse, UserCourse.id == UserCourseSkillVector.user_course_id)
+        .filter(UserCourse.user_id == user_id)
+        .order_by(UserCourseSkillVector.updated_at.desc(), UserCourse.id.desc())
+        .first()
+    )
+
+    if vector_row is None:
+        return None, None
+
+    initial_scores = _normalize_skill_vector(vector_row.start_vector)
+    current_scores = (
+        _normalize_skill_vector(vector_row.current_vector) or initial_scores
+    )
+
+    return initial_scores, current_scores
+
+
+def _build_study_history(db: Session, user_id: int) -> tuple[int, list[dict[str, object]]]:
+    completed_lessons = (
+        db.query(UserLesson.completed_at, Lesson.estimated_minutes)
+        .join(Lesson, Lesson.id == UserLesson.lesson_id)
+        .filter(
+            UserLesson.user_id == user_id,
+            UserLesson.status == "completed",
+            UserLesson.completed_at.isnot(None),
+        )
+        .all()
+    )
+
+    total_studied_minutes = 0
+    monthly_minutes: dict[date, int] = {}
+    today = date.today()
+
+    for completed_at, estimated_minutes in completed_lessons:
+        minutes = max(0, estimated_minutes or 0)
+        if minutes <= 0 or completed_at is None:
+            continue
+
+        total_studied_minutes += minutes
+        completed_on = completed_at.date()
+
+        if completed_on.year == today.year and completed_on.month == today.month:
+            monthly_minutes[completed_on] = monthly_minutes.get(completed_on, 0) + minutes
+
+    study_history = [
+        {"studied_on": studied_on, "minutes": minutes}
+        for studied_on, minutes in sorted(monthly_minutes.items())
+    ]
+
+    return total_studied_minutes, study_history
 
 
 def _build_user_profile_response(db: Session, user: User) -> UserProfileResponse:
@@ -52,6 +147,11 @@ def _build_user_profile_response(db: Session, user: User) -> UserProfileResponse
         )
 
     daily_study_minutes = user.daily_study_minutes or DEFAULT_DAILY_STUDY_MINUTES
+    total_studied_minutes, study_history = _build_study_history(db, user.id)
+    initial_skill_scores, current_skill_scores = _build_skill_score_snapshots(
+        db,
+        user.id,
+    )
     estimated_finish = None
     if total_estimated_minutes > 0:
         days_needed = max(1, ceil(total_estimated_minutes / daily_study_minutes))
@@ -67,6 +167,10 @@ def _build_user_profile_response(db: Session, user: User) -> UserProfileResponse
         estimated_finish=estimated_finish,
         total_estimated_minutes=total_estimated_minutes,
         daily_study_minutes=daily_study_minutes,
+        total_studied_minutes=total_studied_minutes,
+        study_history=study_history,
+        initial_skill_scores=initial_skill_scores,
+        current_skill_scores=current_skill_scores,
     )
 
 

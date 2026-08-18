@@ -97,7 +97,7 @@ testing the "{target_skill}" skill.
 [REQUIREMENTS]
 1. Each inner array has EXACTLY 5 elements:
    Index 0: Target skill code (must be "{target_skill}")
-   Index 1: Difficulty level (must be one of four: Easy, Medium, Hard)
+   Index 1: Difficulty level (must be one of three: Easy, Medium, Hard)
    Index 2: Question text (max 100 words, authentic IT scenario)
    Index 3: "OptionA|OptionB|OptionC|OptionD" (pipe-separated)
    Index 4: Correct answer letter ("A", "B", "C", or "D")

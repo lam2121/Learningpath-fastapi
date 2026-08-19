@@ -274,8 +274,7 @@ C1_SECTION_ORDER = [
     "phrases",
     "reading",
     "dialogue",
-    "process",
-    "dos_donts",
+    "listening",
     "wrapup",
 ]
 NUM_VOCAB = 8
@@ -285,9 +284,9 @@ MIN_DIALOGUE_KEY_PHRASES = 1
 
 def validate_theory_content(rows: Any) -> dict:
     """
-    Validate the Prompt C-1 output (8-section theory content).
+    Validate the Prompt C-1 output (7-section theory content).
 
-    Gate is deliberately minimal (deviation #21): ONLY the 8 section rows in
+    Gate is deliberately minimal (deviation #21): ONLY the section rows in
     the fixed order are checked. No per-row element counts, no word counts,
     and no pinned-count checks — the widest pass window for fallback models
     (llama-3.3-70b / mistral) until a funded Pro key is set.
@@ -301,17 +300,30 @@ def validate_theory_content(rows: Any) -> dict:
         errors.append(f"Response is not a JSON array (got {type(rows).__name__})")
         return {"ok": False, "errors": errors, "warnings": warnings}
 
-    if len(rows) != len(C1_SECTION_ORDER):
+    if len(rows) == len(C1_SECTION_ORDER):
+        for i, expected in enumerate(C1_SECTION_ORDER):
+            row = rows[i]
+            section = row[0] if isinstance(row, list) and len(row) > 0 else None
+            if section != expected:
+                errors.append(f"Row {i}: section type '{section}' must be '{expected}'")
+    elif len(rows) == 8:
+        # Legacy 8-section order backward compatibility
+        legacy_order = ["scenario", "vocab", "phrases", "reading", "dialogue", "process", "dos_donts", "wrapup"]
+        for i, expected in enumerate(legacy_order):
+            row = rows[i]
+            section = row[0] if isinstance(row, list) and len(row) > 0 else None
+            allowed = {expected}
+            if expected == "process":
+                allowed.add("listening")
+            elif expected == "dos_donts":
+                allowed.add("speaking")
+            if section not in allowed:
+                errors.append(f"Row {i}: section type '{section}' must be '{expected}'")
+    else:
         errors.append(
             f"Expected {len(C1_SECTION_ORDER)} theory sections, got {len(rows)}"
         )
         return {"ok": False, "errors": errors, "warnings": warnings}
-
-    for i, expected in enumerate(C1_SECTION_ORDER):
-        row = rows[i]
-        section = row[0] if isinstance(row, list) and len(row) > 0 else None
-        if section != expected:
-            errors.append(f"Row {i}: section type '{section}' must be '{expected}'")
 
     return {"ok": not errors, "errors": errors, "warnings": warnings}
 

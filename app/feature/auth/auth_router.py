@@ -18,9 +18,8 @@ from app.feature.auth.auth_schema import (
 )
 from app.models.lesson import Lesson
 from app.models.user import User
-from app.models.user_course import UserCourse
-from app.models.user_course_skill_vector import UserCourseSkillVector
 from app.models.user_lesson import UserLesson
+from app.models.user_radar_score import UserRadarScore
 from app.models.user_roadmap import UserRoadmap
 
 router = APIRouter()
@@ -66,10 +65,9 @@ def _build_skill_score_snapshots(
     user_id: int,
 ) -> tuple[dict[str, int] | None, dict[str, int] | None]:
     vector_row = (
-        db.query(UserCourseSkillVector)
-        .join(UserCourse, UserCourse.id == UserCourseSkillVector.user_course_id)
-        .filter(UserCourse.user_id == user_id)
-        .order_by(UserCourseSkillVector.updated_at.desc(), UserCourse.id.desc())
+        db.query(UserRadarScore)
+        .filter(UserRadarScore.user_id == user_id)
+        .order_by(UserRadarScore.updated_at.desc(), UserRadarScore.id.desc())
         .first()
     )
 

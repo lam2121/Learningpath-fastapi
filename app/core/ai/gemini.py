@@ -197,7 +197,7 @@ def _load_providers() -> list[ProviderConfig]:
             "openrouter",
             "https://openrouter.ai/api/v1",
             app_config.OpenRouter,
-            "meta-llama/llama-3.3-70b-instruct",
+            "z-ai/glm-5.2:free",
         ),
         (
             "mistral",

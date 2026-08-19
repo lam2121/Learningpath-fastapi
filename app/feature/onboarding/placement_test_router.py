@@ -1,7 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.config import app_config
 from app.core.database import get_db
 from app.core.dependencies import get_current_user_optional
 from app.core.roadmap import lesson_is_assigned
@@ -236,21 +235,15 @@ def select_roadmap_endpoint(
 )
 async def generate_roadmap_lesson(
     lesson_id: int,
+    background_tasks: BackgroundTasks,
     force: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_current_user_optional),
 ):
     """
-    Dev-mode (synchronous) C-1 + C-2 generation for one roadmap lesson
-    (§12.9). The lesson must belong to a topic in the caller's roadmap.
-    Dev-gated: returns 404 in production (can graduate to the real study flow).
+    Kick off background C-1 + C-2 generation for one roadmap lesson that belongs
+    to the caller's roadmap.
     """
-    if app_config.APP_ENV == "production":
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Dev-mode lesson generation is disabled in production",
-        )
-
     user_id = _resolve_user_id(db, current_user)
 
     lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
@@ -278,11 +271,20 @@ async def generate_roadmap_lesson(
             detail="Lesson is not assigned for your track",
         )
 
+    if lesson.is_generated and not force:
+        return LessonGenerateResponse(
+            lesson_id=lesson_id,
+            status="completed",
+            message="Lesson already generated and ready to study",
+        )
+
+    from app.feature.admin import admin_service
     from app.core.ai.generation import generate_lesson_content
 
-    result = await generate_lesson_content(lesson_id, force=force)
+    info = admin_service.kickoff_lesson_generation(db, lesson_id, force=force)
+    background_tasks.add_task(generate_lesson_content, lesson_id, force=force)
     return LessonGenerateResponse(
         lesson_id=lesson_id,
-        status=result.get("status", "failed"),
-        message=result.get("message") or result.get("error") or "unknown",
+        status="started",
+        message=info["message"],
     )

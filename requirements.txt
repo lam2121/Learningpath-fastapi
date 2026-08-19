@@ -14,3 +14,5 @@ python-multipart
 google-genai
 httpx==0.28.1   # Direct dependency of app/core/ai/gemini.py (multi-provider pool)
 ruff
+edge-tts
+aiofiles

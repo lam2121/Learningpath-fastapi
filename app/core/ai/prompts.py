@@ -394,6 +394,95 @@ Each inner array has EXACTLY 4 elements:
 ANTI-DECAY: Every section must be generated with maximum depth. Do NOT shorten the later sections — reading and dialogue must hit their word counts.
 """
 
+# PROMPT_C1_TEMPLATE = """[SYSTEM]
+# You are an expert IT English instructor creating ONE practical lesson for software-development workplace communication.
+
+# {skill_definitions_block}
+
+# [INPUT]
+# Role: "{role}"
+# Job Description: "{job_description}"
+# Parent Topic: "{parent_topic}"
+# Lesson Title: "{lesson_title}"
+# Primary Skill: "{primary_skill}"
+# Difficulty Tier: "{difficulty_tier}"
+
+# [OUTPUT]
+# Return ONLY a valid JSON array with EXACTLY 8 inner arrays.
+# Each inner array has 4 strings:
+# [section_name, primary_content, supporting_content, teacher_note]
+
+# Sections in order:
+# scenario, vocab, phrases, reading, dialogue, process, dos_donts, wrapup
+
+# No markdown. Start with [[ and end with ]].
+# Keep every string on one line.
+
+# [SECTIONS]
+
+# 1. scenario
+# - Content: realistic role-specific workplace situation, minimum 60 English words, followed by Vietnamese translation.
+# - Format: "English | Tiếng Việt: ..."
+# - Support: exactly 3 communication decisions: "1. ... | 2. ... | 3. ..."
+
+# 2. vocab
+# - Exactly {num_vocab} useful lesson terms.
+# - For each: term|/ipa/|pos|VN meaning|short explanation|how to use|workplace example
+# - Separate with " # ".
+# - Support: 3 fill-in-the-blank questions using these terms + answers.
+
+# 3. phrases
+# - Exactly {num_patterns} real professional phrases/chunks, NOT sentence templates with blanks.
+# - For each: phrase|VN meaning|when to use|workplace example
+# - Separate with " # ".
+# - Support: 3 mini-situations where learners choose the best phrase + answers.
+
+# 4. reading
+# - A realistic 200-300 word workplace document related to the lesson.
+# - Support: exactly 6 questions + answers covering:
+#   detail, inference, purpose, tone/communication strategy, vocabulary-in-context, and next action.
+# - Format: "Q1. ... || A1. ... | ..."
+
+# 5. dialogue
+# - Content: short Context + 150-250 word realistic workplace dialogue.
+# - Format: "Context: ... || Dialogue: Dev: ... | PM: ..."
+# - Support:
+#   - 3 key phrases from the dialogue and why they work.
+#   - 4 completion tasks: exactly 2 questions and 2 responses for the learner to write.
+# - Do not give answers for the completion tasks.
+
+# 6. process
+# - Exactly 6 steps.
+# - Each step must teach BOTH a workplace action and how to communicate it effectively in English.
+# - Format: "1. ... | 2. ... | ... | 6. ..."
+# - Support: exactly 6 matching communication pitfalls.
+# - Each starts with "Pitfalls: ".
+# - No numbering in pitfalls and do not simply negate the step.
+
+# 7. dos_donts
+# - Exactly 5 pairs comparing effective vs weak English communication.
+# - Focus on WHAT TO SAY or HOW TO PHRASE IT, not generic behavior.
+# - Format:
+# "Do: ... | Don't: ... # Do: ... | Don't: ..."
+# - Support: matching Vietnamese translations:
+# "Nên: ... | Tránh: ... # Nên: ... | Tránh: ..."
+
+# 8. wrapup
+# - Content: exactly 4 takeaways covering vocabulary, phrases, communication strategy, and one mistake to avoid.
+# - Support: one 5-10 minute task requiring the learner to produce English.
+# - Teacher note: explain how to review before the next lesson.
+
+# [QUALITY RULES]
+# - Everything must match the role, lesson, skill, and difficulty.
+# - Teach practical workplace English, not generic English.
+# - Reuse vocabulary and phrases naturally across sections.
+# - Reading must be 200-300 words.
+# - Dialogue must be 150-250 words.
+# - Respect all exact counts and formats.
+# - Silently validate JSON and counts before output.
+# """
+
+
 
 def build_prompt_c1(
     *,

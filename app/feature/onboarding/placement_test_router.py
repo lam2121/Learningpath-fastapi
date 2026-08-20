@@ -14,6 +14,7 @@ from app.feature.onboarding.placement_test_schema import (
 from app.feature.onboarding.placement_test_service import (
     complete_placement_test,
     fetch_questions_by_role,
+    get_first_assigned_lesson_ids,
     get_placement_test_result,
     get_user_roadmap,
     recompute_roadmap,
@@ -38,6 +39,17 @@ from app.models.user import User
 from app.models.user_roadmap import UserRoadmap
 
 router = APIRouter()
+
+
+def _schedule_first_topic_lessons(
+    background_tasks: BackgroundTasks,
+    db: Session,
+    user_id: int,
+) -> None:
+    from app.core.ai.generation import generate_lesson_content
+
+    for lesson_id in get_first_assigned_lesson_ids(db, user_id):
+        background_tasks.add_task(generate_lesson_content, lesson_id, force=False)
 
 
 @router.get(
@@ -66,6 +78,7 @@ def get_onboarding_status(
 )
 def finalize_placement_test(
     request: CompletePlacementTestRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_current_user_optional),
 ):
@@ -92,6 +105,7 @@ def finalize_placement_test(
             role_id=request.role_id,
             placement_test_answers=request.placement_test_answers,
         )
+        _schedule_first_topic_lessons(background_tasks, db, user_id)
         return CompletePlacementTestResponse(
             message="Placement test completed and onboarding saved successfully",
             learning_status="enrolled",
@@ -231,6 +245,7 @@ def _get_owned_assigned_lesson(db: Session, user_id: int, lesson_id: int) -> Les
     status_code=status.HTTP_200_OK,
 )
 def get_roadmap(
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_current_user_optional),
 ):
@@ -239,7 +254,9 @@ def get_roadmap(
     + assigned-lesson counts). Auto-computes the roadmap when it is empty.
     """
     user_id = _resolve_user_id(db, current_user)
-    return get_user_roadmap(db, user_id)
+    roadmap = get_user_roadmap(db, user_id)
+    _schedule_first_topic_lessons(background_tasks, db, user_id)
+    return roadmap
 
 
 @router.post(
@@ -249,6 +266,7 @@ def get_roadmap(
 )
 def select_roadmap_endpoint(
     request: RoadmapSelectRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_current_user_optional),
 ):
@@ -260,9 +278,11 @@ def select_roadmap_endpoint(
       select, skipping placement answers. Returns 404 when APP_ENV=production.
     """
     user_id = _resolve_user_id(db, current_user)
-    return recompute_roadmap(
+    roadmap = recompute_roadmap(
         db, user_id, skills=request.skills, role_id=request.role_id
     )
+    _schedule_first_topic_lessons(background_tasks, db, user_id)
+    return roadmap
 
 
 @router.post(

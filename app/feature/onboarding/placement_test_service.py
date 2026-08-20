@@ -577,6 +577,42 @@ def build_and_save_roadmap(db: Session, user_id: int) -> None:
     _build_and_save_roadmap(db, user_id)
 
 
+def get_first_assigned_lesson_ids(db: Session, user_id: int) -> list[int]:
+    """Return the first assigned lesson id for each topic in the user's roadmap."""
+    rows = (
+        db.query(UserRoadmap)
+        .filter(UserRoadmap.user_id == user_id)
+        .order_by(UserRoadmap.sort_order.asc())
+        .all()
+    )
+    if not rows:
+        return []
+
+    track = rows[0].track
+    topic_ids = [row.topic_id for row in rows]
+    lessons = (
+        db.query(Lesson)
+        .filter(Lesson.topic_id.in_(topic_ids))
+        .order_by(Lesson.topic_id.asc(), Lesson.id.asc())
+        .all()
+    )
+
+    first_lesson_ids: list[int] = []
+    seen_topic_ids: set[int] = set()
+    for lesson in lessons:
+        if lesson.topic_id in seen_topic_ids:
+            continue
+        if not lesson_is_assigned(track, lesson.difficulty_tier):
+            continue
+        if lesson.is_generated:
+            seen_topic_ids.add(lesson.topic_id)
+            continue
+        first_lesson_ids.append(lesson.id)
+        seen_topic_ids.add(lesson.topic_id)
+
+    return first_lesson_ids
+
+
 def get_user_roadmap(db: Session, user_id: int) -> RoadmapResponse:
     """Fetch the user's roadmap with lessons inline. Auto-computes when empty."""
     from app.models.user import User

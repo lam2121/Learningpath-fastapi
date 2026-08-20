@@ -270,9 +270,14 @@ def _build_lesson_quiz_history(
     db: Session, user_id: int
 ) -> list[LessonQuizHistoryEntryResponse]:
     rows = (
-        db.query(UserLesson, Lesson, Topic)
+        db.query(UserLesson, Lesson, Topic, UserRoadmap)
         .join(Lesson, Lesson.id == UserLesson.lesson_id)
         .join(Topic, Topic.id == Lesson.topic_id)
+        .outerjoin(
+            UserRoadmap,
+            (UserRoadmap.user_id == UserLesson.user_id)
+            & (UserRoadmap.topic_id == Lesson.topic_id),
+        )
         .filter(UserLesson.user_id == user_id)
         .order_by(UserLesson.completed_at.desc(), UserLesson.id.desc())
         .all()
@@ -280,7 +285,7 @@ def _build_lesson_quiz_history(
 
     history: list[LessonQuizHistoryEntryResponse] = []
 
-    for user_lesson, lesson, topic in rows:
+    for user_lesson, lesson, topic, user_roadmap in rows:
         saved_state = _coerce_json_object(user_lesson.user_answers)
         best_attempt = _extract_best_passing_attempt(saved_state)
         best_score_percent = _extract_best_passing_score(saved_state, user_lesson.progress)
@@ -305,6 +310,9 @@ def _build_lesson_quiz_history(
                 lesson_id=lesson.id,
                 lesson_title=lesson.title,
                 topic_name=topic.name if topic else None,
+                topic_sort_order=(
+                    (user_roadmap.sort_order + 1) if user_roadmap is not None else None
+                ),
                 skill=lesson.primary_skill,
                 difficulty_tier=lesson.difficulty_tier,
                 status=_derive_lesson_quiz_status(

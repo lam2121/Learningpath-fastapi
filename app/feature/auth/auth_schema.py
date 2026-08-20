@@ -43,6 +43,7 @@ class LessonQuizHistoryEntryResponse(BaseModel):
     lesson_id: int
     lesson_title: str
     topic_name: str | None = None
+    topic_sort_order: int | None = None
     skill: str
     difficulty_tier: str
     status: str

@@ -31,47 +31,7 @@ def get_skill_description(
     item = skill_definitions.get(skill) or {}
     return str(item.get("description", "")).strip()
 
-# PROMPT_A_TEMPLATE = """[SYSTEM INSTRUCTION]
-# You are an expert IT English Assessment Architect.
-# Generate EXACTLY {num_questions} multiple-choice questions for the "{role}" role,
-# testing the "{target_skill}" skill.
 
-# {skill_definitions_block}
-
-# [OUTPUT CONSTRAINT]
-# - Output ONLY a raw, valid JSON array of arrays.
-# - NO markdown formatting, NO backticks, NO object keys, NO conversational text.
-# - Start directly with [[ and end directly with ]].
-
-# [INPUT DATA]
-# - Role: "{role}"
-# - Job Description: "{job_description}"
-# - Target Skill: "{target_skill}"  (one of "D_doc" | "C_comm" | "T_trouble" | "G_custom")
-# - Target Skill Description: "{target_skill_description}"
-# - Seed Tier 1 Data (Basic): "{seed_tier_1}"
-# - Seed Tier 2 Data (Advanced): "{seed_tier_2}"
-# - Questions: {num_questions} per call (distribute as 3 questions per difficulty band)
-
-# [REQUIREMENTS]
-# 1. Each inner array has EXACTLY 5 elements:
-#    Index 0: Target skill code (must be "{target_skill}")
-#    Index 1: Difficulty level (must be one of four: Easy, Medium, Hard, Expert)
-#    Index 2: Question text (max 25 words, authentic IT scenario)
-#    Index 3: "OptionA|OptionB|OptionC|OptionD" (pipe-separated)
-#    Index 4: Correct answer letter ("A", "B", "C", or "D")
-
-# 2. Distribute the 12 questions across **4 difficulty bands** (3 questions per band):
-#    Band 1 = Easy (Tier 1 vocabulary), Band 2 = Medium,
-#    Band 3 = Hard (Tier 2 vocabulary), Band 4 = Expert.
-
-# 3. CRITICAL: Use single quotes (') inside strings, never unescaped double quotes.
-
-# [EXAMPLE]
-# [
-#   ["{target_skill}", "Easy", "What does SRS stand for?", "Software Requirement Specification|System Resource Summary|Software Rate Standard|System Renewal Section", "A"],
-#   ["{target_skill}", "Hard", "Which phrase diplomatically rejects scope creep?", "No we cannot|That impacts our timeline, let us review|Stop asking|I will add it now", "B"]
-# ]
-# """
 
 PROMPT_A_TEMPLATE = """[SYSTEM INSTRUCTION]
 You are an expert IT English Assessment Architect.
@@ -83,7 +43,7 @@ testing the "{target_skill}" skill.
 [OUTPUT CONSTRAINT]
 - Output ONLY a raw, valid JSON array of arrays.
 - NO markdown formatting, NO backticks, NO object keys, NO conversational text.
-- Start directly with [[ and end directly with ]].
+- Start directly with [ and end directly with ].
 
 [INPUT DATA]
 - Role: "{role}"
@@ -95,13 +55,13 @@ testing the "{target_skill}" skill.
 - Questions: {num_questions} per call (distribute as 3 questions per difficulty band)
 
 [REQUIREMENTS]
-1. Each inner array has EXACTLY 5 elements:
+1. Each inner array has EXACTLY 6 elements:
    Index 0: Target skill code (must be "{target_skill}")
    Index 1: Difficulty level (must be one of three: Easy, Medium, Hard)
    Index 2: Question text (max 100 words, authentic IT scenario)
    Index 3: "OptionA|OptionB|OptionC|OptionD" (pipe-separated)
    Index 4: Correct answer letter ("A", "B", "C", or "D")
-   Index 5: Must be Context layer or Language layer
+   Index 5: Expanded skill layer ("Context_layer" or "Language_layer")
 2. Distribute the {num_questions} questions across **3 difficulty bands** (4 questions per band):
    Band 1 = Easy (Tier 1 vocabulary), Band 2 = Medium,
    Band 3 = Hard (Tier 2 vocabulary).
@@ -112,7 +72,7 @@ testing the "{target_skill}" skill.
 [
   ["{target_skill}", "Easy", "During a meeting, the client presents an unclear requirement. Which response is most appropriate for seeking clarification without causing discomfort?", "What do you mean?|Could you elaborate a bit more on that requirement so I can make sure I capture it correctly?|That does not make sense to me.|I do not understand. Please explain.", "B","Context_layer"],
   ["{target_skill}", "Hard", "You need to reject a colleague's architectural proposal because you are concerned about its scalability. Which response demonstrates the most professional and constructive disagreement?", "This will not work; we need another approach.|I see the value in this approach, but I am concerned it might not scale well under peak load. Could we explore a caching layer as an alternative?|I disagree with this design.|Let us just do it my way instead.", "B","Context_layer"]
-  ["{target_skill}", "Easy", "Which sentence is the most grammatically correct and professional way for a Project Manager to provide a progress update?", "The team have complete the task yesterday.|The team completed the task yesterday and is now preparing the deliverables for review.|The team completing the task yesterday.|The task has complete by the team yesterday.", "B","Language layer"],
+  ["{target_skill}", "Easy", "Which sentence is the most grammatically correct and professional way for a Project Manager to provide a progress update?", "The team have complete the task yesterday.|The team completed the task yesterday and is now preparing the deliverables for review.|The team completing the task yesterday.|The task has complete by the team yesterday.", "B","Language_layer"],
   ["{target_skill}", "Medium", "Which Project Management term refers to the uncontrolled expansion of project requirements without corresponding adjustments to time, budget, or resources?", "Risk mitigation|Scope creep|Resource allocation|Quality assurance", "B","Language_layer"],
   ["{target_skill}", "Hard", "Which sentence communicates a potential project delay most fluently and professionally?", "The project will be late because the development team did not finish.|We regret to inform you that we cannot do it on time.|Due to an unexpected technical dependency, the milestone may be delayed by three working days; however, we are evaluating mitigation options to minimize the impact.|The deadline is impossible, so we need more time.", "C","Language_layer"]
 ]
@@ -162,12 +122,15 @@ Design a course outline of EXACTLY {num_topics} topics for the "{role}" role.
 {skill_definitions_block}
 
 [REQUIRED EXACT DISTRIBUTION]
-You must generate EXACTLY {num_topics} topics total. To ensure perfect counting, generate them sequentially in these exact groups:
-1. First, EXACTLY {d_count} topics for "D_doc"
-2. Second, EXACTLY {c_count} topics for "C_comm"
-3. Third, EXACTLY {t_count} topics for "T_trouble"
-4. Fourth, EXACTLY {g_count} topics for "G_custom"
-STOP immediately after the final G_custom topic. The total must be exactly {num_topics}.
+You must generate EXACTLY {num_topics} topics total. Count carefully — each group must have EXACTLY the count listed below. Do NOT add extra topics.
+
+Group 1 — D_doc: EXACTLY {d_count} topics
+Group 2 — C_comm: EXACTLY {c_count} topics
+Group 3 — T_trouble: EXACTLY {t_count} topics
+Group 4 — G_custom: EXACTLY {g_count} topics
+TOTAL: {d_count} + {c_count} + {t_count} + {g_count} = {num_topics}
+
+Stop immediately after the last G_custom topic. Do NOT generate any extra topics beyond the counts above.
 
 [REQUIREMENTS]
 1. Output format: A single JSON array containing exactly {num_topics} inner arrays.
@@ -184,19 +147,24 @@ STOP immediately after the final G_custom topic. The total must be exactly {num_
 - Seed Tier 2 Data: "{seed_tier_2}"
 
 [OUTPUT CONSTRAINT]
-- Output ONLY a raw, valid JSON array of arrays.
+- Output ONLY a raw, valid JSON array of exactly {num_topics} inner arrays.
 - NO markdown formatting (no ```json or ```).
 - NO conversational text.
-- Start directly with [[ and end directly with ]].
+- Start directly with [ and end directly with ].
+- Do NOT add any topics beyond the exact counts listed above.
 
 [EXAMPLE EXPECTED STRUCTURE]
 [
   ["Drafting initial project requirements", "D_doc", "tier_1"],
   ["Writing a complex BRD", "D_doc", "tier_2"],
+  ... ({d_count} D_doc topics total) ...
   ["Facilitating daily standups", "C_comm", "tier_1"],
-  ... (continue until exactly {num_topics} items are reached) ...
+  ... ({c_count} C_comm topics total) ...
+  ["Investigating production incidents", "T_trouble", "tier_1"],
+  ... ({t_count} T_trouble topics total) ...
   ["Negotiating contract extensions", "G_custom", "tier_2"]
 ]
+Total: exactly {num_topics} topics. Do NOT add more.
 """
 
 
@@ -275,7 +243,7 @@ Break down the topic "{topic_name}" into EXACTLY {num_lessons} lesson titles for
 [OUTPUT CONSTRAINT]
 - Output ONLY a raw, valid JSON array of arrays.
 - NO markdown, NO backticks, NO conversational text.
-- Start directly with [[ and end directly with ]].
+- Start directly with [ and end directly with ].
 
 [INPUT DATA]
 - Role: "{role}"
@@ -347,16 +315,17 @@ NUM_PATTERNS = 5
 
 PROMPT_C1_TEMPLATE = """[SYSTEM INSTRUCTION]
 You are an expert IT English Instructor and Curriculum Architect specialized in software development workplace communication.
-Write the complete teaching content (Theory) for ONE lesson. Output a raw, valid JSON array.
+Write the complete teaching content (Theory) for ONE practical workplace lesson for an IT professional.
+Output ONLY a raw, valid JSON array of EXACTLY 7 inner arrays.
 
 {skill_definitions_block}
 
 [OUTPUT CONSTRAINT]
-- Output ONLY a raw, valid JSON array containing EXACTLY 8 inner arrays.
-- NO markdown, NO backticks, NO object keys, NO conversational text.
-- Start directly with [[ and end directly with ]].
-- Every string must stay on ONE line (no line breaks inside a string).
-- CRITICAL: use single quotes (') inside strings, never unescaped double quotes.
+- Output ONLY a raw, valid JSON array containing EXACTLY 7 inner arrays.
+- NO markdown formatting (no ```json or ```), NO backticks, NO object keys, NO conversational text.
+- Start directly with [ and end directly with ].
+- Every string must stay on ONE single line (NO literal line breaks inside a string; use escaped \\n if needed).
+- CRITICAL: Use single quotes (') inside strings, NEVER unescaped double quotes.
 
 [INPUT DATA]
 - Role: "{role}"
@@ -366,33 +335,62 @@ Write the complete teaching content (Theory) for ONE lesson. Output a raw, valid
 - Primary Skill: "{primary_skill}"
 - Difficulty Tier: "{difficulty_tier}"
 
-[FORMAT]
-Each inner array has EXACTLY 4 elements:
-  Index 0: section name (scenario | vocab | phrases | reading | dialogue | process | dos_donts | wrapup)
-  Index 1: primary content (the teaching material — see specs below)
-  Index 2: supporting content (exact format per section below)
-  Index 3: teacher note (one short sentence on how the learner should study this section)
+[STRUCTURE]
+Each of the 7 inner arrays has EXACTLY 4 elements:
+  Index 0: Section name (must be in exact order: scenario | vocab | phrases | reading | dialogue | listening | wrapup)
+  Index 1: Primary teaching content (see specifications below)
+  Index 2: Supporting practice / analytical / pronunciation content (see specifications below)
+  Index 3: Teacher note / pedagogical guidance (one short concise sentence on how to study/apply this section)
 
-[SECTION SPECS]
+[SECTION SPECIFICATIONS]
 
-1. scenario — Index 1: a realistic role-specific workplace situation tied to the job description, in ENGLISH followed by a VIETNAMESE translation, format "English | Tiếng Việt". At least 60 English words. Index 2: exactly 3 numbered decision points the learner must resolve, format "1. ... | 2. ... | 3. ...".
+1. scenario
+   - Index 0: 'scenario'
+   - Index 1: A realistic role-specific workplace situation tied to the job description, in ENGLISH followed by a natural VIETNAMESE translation. Minimum 60 English words. Format strictly as: "English scenario text | Tiếng Việt: Bản dịch tiếng Việt tự nhiên"
+   - Index 2: EXACTLY 3 communication decision points the learner must resolve. Format: "1. [Decision 1] | 2. [Decision 2] | 3. [Decision 3]"
+   - Index 3: Teacher note on analyzing communication challenges in this scenario.
 
-2. vocab — Index 1: EXACTLY {num_vocab} role-specific IT English terms, format "term|/ipa/|pos|VN meaning|example # term2|/ipa/|pos|VN meaning|example". All terms must be usable in the lesson's communication scenario.
+2. vocab (Integrated with Speaking & Pronunciation)
+   - Index 0: 'vocab'
+   - Index 1: EXACTLY {num_vocab} role-specific IT English terms. All terms must be directly relevant to the lesson communication scenario. Format each entry as "term|/ipa/|pos|VN meaning|English explanation & nuance|workplace example & usage note|pronunciation guide & syllable stress", separated by " # ".
+   - Index 2: Speaking & pronunciation drills for these terms: common pronunciation mistakes (e.g. silent letters, missing ending consonants /s/, /t/, /ks/, wrong syllable stress) + 3 spoken practice drill sentences to read aloud. Format: "Pronunciation Guide: [Specific phonetic tips for IT learners] | Drills: 1. [Practice sentence 1 with target term] | 2. [Practice sentence 2 with target term] | 3. [Practice sentence 3 with target term]"
+   - Index 3: Teacher note on vocal placement, mouth shape, and shadowing exercises to speak these technical terms clearly and confidently.
 
-3. phrases — Index 1: EXACTLY {num_patterns} professional sentence frames, format "frame with ___ | usage | example # frame2 | usage | example". Each frame contains exactly ONE blank "___".
+3. phrases
+   - Index 0: 'phrases'
+   - Index 1: EXACTLY {num_patterns} genuine, professional IT workplace phrases/collocations (NOT sentence templates with blanks). Format each entry as "phrase|VN meaning|when to use (context & tone)|workplace example", separated by " # ".
+   - Index 2: 3 realistic mini-scenarios where the learner must choose the best phrase among options. Format: "Scenario 1: [Context] -> Best phrase: [Phrase] | Scenario 2: ... | Scenario 3: ..."
+   - Index 3: Teacher note on adapting tone and formality when delivering these phrases.
 
-4. reading — Index 1: an authentic 200-300 word workplace document (status email, bug report, post-mortem, API doc excerpt) tied to the lesson. Index 2: 3-4 comprehension questions with answers, format "Q1. ... ? || A1. ... | Q2. ... ? || A2. ...".
+4. reading
+   - Index 0: 'reading'
+   - Index 1: An authentic 200-300 word workplace document (such as an Incident Post-Mortem, Architecture Decision Record, PR Review Thread, Client Escalation Email, or Technical Release Note) tied to the lesson.
+   - Index 2: EXACTLY 6 comprehension questions with detailed reference answers covering 6 taxonomy dimensions: Detail, Main Purpose, Inference, Communication Tone/Strategy, Vocabulary in Context, and Next Action. Format strictly as: "Q1. [Question] || A1. [Detailed answer] | Q2. [Question] || A2. [Detailed answer] | Q3. [Question] || A3. [Detailed answer] | Q4. [Question] || A4. [Detailed answer] | Q5. [Question] || A5. [Detailed answer] | Q6. [Question] || A6. [Detailed answer]"
+   - Index 3: Teacher note on reading strategies for technical workplace documents.
 
-5. dialogue — Index 1: a 150-250 word TEXT-ONLY workplace exchange with speaker labels, format strictly as: "Dev: ... | PM: ... | Dev: ...". Index 2: at least 3 key phrases used and why they are effective, format stricly as: "phrase - why it works | phrase2 - why it works".
+5. dialogue
+   - Index 0: 'dialogue'
+   - Index 1: A 150-250 word realistic workplace dialogue with a clear context setup. Format strictly as: "Context: [1-2 sentences setting the scene: participants, setting, goal] || Dialogue: Speaker 1: [Turn] | Speaker 2: [Turn] | Speaker 1: [Turn] | ..."
+   - Index 2: Two parts separated by " || ":
+     Part A: At least 3 key communicative phrases used and why they work (format: "phrase - why it works | phrase2 - why it works").
+     Part B: 4 interactive completion tasks (2 questions to ask + 2 responses to give) for the learner to practice replying. Format: "Practice Tasks: 1. (Ask): [Prompt] | 2. (Ask): [Prompt] | 3. (Reply): [Prompt] | 4. (Reply): [Prompt]"
+   - Index 3: Teacher note on pronunciation, rhythm, and active listening in IT meetings.
 
-6. process — Index 1: EXACTLY 6 step-by-step workflow actions for a real role procedure (deployment, incident response, scope negotiation, PR review...). Format strictly as: "1. [Action] | 2. [Action] | 3. [Action] | 4. [Action] | 5. [Action] | 6. [Action]". Index 2: EXACTLY 6 specific, engaging, and real-world pitfalls corresponding 1-to-1 with each step in Index 1. Format strictly as: "Pitfalls: [Engaging mistake 1] | Pitfalls: [Engaging mistake 2] | Pitfalls: [Engaging mistake 3] | Pitfalls: [Engaging mistake 4] | Pitfalls: [Engaging mistake 5] | Pitfalls: [Engaging mistake 6]". STRICT REQUIREMENTS FOR INDEX 2: 1) NO NUMBERS ALLOWED. Do NOT include "1.", "2.", etc. Every single item MUST start exactly with the prefix "Pitfalls: " followed immediately by the text. 2) CRITICAL ANTI-LAZY RULE: DO NOT simply negate the step (e.g., if a step is "Develop a communication plan", you CANNOT write "Not developing a communication plan" or "Failing to develop a plan"). 3) MAKE IT ENGAGING & INSIGHTFUL: Describe a specific, contextual root cause, a "hidden trap", or a realistic negative consequence that happens IN PRACTICE. Use varied, professional vocabulary to offer practical "insider advice". 4) LENGTH LIMIT: Keep EVERY single pitfall strictly concise (1-2 sentences max), practical, and easy to understand for learners. Example: Instead of "Not reviewing the scope", write "Pitfalls: Skimming the requirements and missing hidden edge cases, leading to massive scope creep mid-project".
+6. listening
+   - Index 0: 'listening'
+   - Index 1: An authentic workplace spoken monologue/audio transcript (e.g. an engineering lead debriefing an outage, a scrum master delivering sprint blockers update, or a client providing verbal feedback in a sync). Length: 120-180 words. Format strictly as: "Audio Script: [Narrator/Speaker name]: '[Spoken text script with natural pauses and spoken markers]'"
+   - Index 2: 4-5 focused listening comprehension questions with answers testing key numbers, decisions, urgency, and technical root causes. Format: "Q1. [Question] || A1. [Detailed answer] | Q2. [Question] || A2. [Detailed answer] | Q3. [Question] || A3. [Detailed answer] | Q4. [Question] || A4. [Detailed answer]"
+   - Index 3: Teacher note on listening for keywords, intonation cues, and action items in fast-paced IT spoken English.
 
-7. dos_donts — Index 1: EXACTLY 5 "Do | Don't" response pairs for the lesson's scenario. Format strictly as: "Do: [English action] | Don't: [English action] # Do: [English action] | Don't: [English action] # Do: [English action] | Don't: [English action] # Do: [English action] | Don't: [English action] # Do: [English action] | Don't: [English action]" (5 pairs separated by "#"). Index 2: Vietnamese translations corresponding 1-to-1 with each of the 5 pairs in Index 1. Format strictly as:"Nên: [Vietnamese translation of the Do action] | Không nên: [Vietnamese translation of the Don't action] # [...] | [...] # [...] | [...] # [...] | [...] # [...] | [...]" (EXACTLY 5 parts separated by "#", matching the exact order of Index 1. STRICT REQUIREMENT: DO NOT include prefixes like "Do:", "Don't:", "Làm:", or "Không nên:" anywhere. CRITICAL: For the Vietnamese translation of the "Don't" action, DO NOT start the sentence with negative imperative words like "Không nên", "Đừng", or "Không". Translate ONLY the base action. Example: If Index 1 is "Don't: Assume things", Index 2 MUST be "... | Giả định mọi thứ", NOT "... | Không nên giả định mọi thứ". TRANSLATION GUIDELINES: Provide contextual, natural, and professional Vietnamese translations rather than strict literal word-for-word renderings. Retain standard technical terms, domain jargon, or professional concepts in English whenever translating them into Vietnamese feels forced, awkward, or loses precision (e.g., keep terms like "technical debt", "scope change", "stakeholder", "sprint" in English if a Vietnamese translation sounds unnatural)).
+7. wrapup
+   - Index 0: 'wrapup'
+   - Index 1: EXACTLY 4 core linguistic takeaways covering: (1) Key Vocabulary & Pronunciation, (2) Strategic Phrase, (3) Essential Spoken/Communication Rule, (4) Critical Pitfall to avoid. Format: "1. [Vocab & Pronunciation Takeaway] | 2. [Phrase Takeaway] | 3. [Rule Takeaway] | 4. [Pitfall Takeaway]"
+   - Index 2: One practical, 5-10 minute productive English output task that the learner can write or speak immediately. Format: "Action Task: [Specific task prompt instructing the learner to draft an email, Slack update, or speech outline using lesson concepts]"
+   - Index 3: Teacher note: Checklist and self-evaluation criteria before proceeding to the quiz.
 
-8. wrapup — Index 1: 3-4 core takeaways from the lesson. Index 2: one practical next-step task the learner can do right away (e.g. rewrite the reading document for their own project, or deliver the dialogue aloud). Index 3: how to review before moving on.
-
-ANTI-DECAY: Every section must be generated with maximum depth. Do NOT shorten the later sections — reading and dialogue must hit their word counts.
+ANTI-DECAY: Every section must be generated with maximum depth. Do NOT shorten the later sections — reading, dialogue, and listening must hit their word counts.
 """
+
 
 
 def build_prompt_c1(
@@ -407,7 +405,7 @@ def build_prompt_c1(
     num_vocab: int = NUM_VOCAB,
     num_patterns: int = NUM_PATTERNS,
 ) -> str:
-    """Build the Prompt C-1 payload (8-section theory content for one lesson)."""
+    """Build the Prompt C-1 payload (7-section theory content for one lesson)."""
     return PROMPT_C1_TEMPLATE.format(
         role=role,
         job_description=job_description,
@@ -527,7 +525,7 @@ TYPE 1: "fill_blank" — {num_per_type} inner arrays, each with 4 elements:
   Index 2: Correct option (verbatim text)
   Index 3: English explanation of why the correct option is the right word/phrase for the blank (max 30 words)
   SOURCE (answers): the blanked term and all four options are terms or phrases taken from the
-  theory — any of its sections (vocab, phrases, scenario, reading, dialogue, process, dos_donts).
+  theory — any of its sections (vocab, phrases, scenario, reading, dialogue, listening, wrapup).
   The correct option is the theory's exact term. STEM: a fresh professional sentence grounded in
   the lesson context, never a verbatim copy of the theory's examples.
 
@@ -537,9 +535,8 @@ TYPE 2: "multi_select" — {num_per_type} inner arrays, each with 4 elements:
   Index 2: Correct option indices as "0|2|4" (zero-based, pipe-separated, EXACTLY 2-3 correct options)
   Index 3: English explanation of why the selected options are the correct professional responses and why the unselected ones are less appropriate (max 40 words)
   SOURCE (answers): correct options are professional responses or terms taken from the theory
-  (e.g. the dos_donts Do list, dialogue key phrases, scenario decision resolutions, process steps,
-  reading recommendations); distractors are theory-based but clearly less appropriate. STEM: any
-  lesson context (a decision point, a dialogue moment, a reading or process situation), varied
+  (e.g. dialogue key phrases, scenario decision resolutions, listening key facts, reading recommendations);
+  distractors are theory-based but clearly less appropriate. STEM: any lesson context (a decision point, a dialogue moment, a reading or listening situation), varied
   across questions; vary the instruction form (select the professional responses / which responses
   are NOT appropriate / what to do next).
 
@@ -548,9 +545,8 @@ TYPE 3: "ordering" — {num_per_type} inner arrays, each with 4 elements:
   Index 1: "ShuffledStep1|ShuffledStep2|ShuffledStep3|ShuffledStep4" (randomized)
   Index 2: Correct zero-based indices as "1|0|2|3"
   Index 3: English explanation of why this is the correct sequence for the workflow (max 35 words)
-  SOURCE (answers): a multi-step sequence from the theory — the 'process' workflow when present,
-  otherwise any ordered list in the theory (e.g. steps in the scenario, reading, dialogue, or
-  dos_donts). Shuffle the items; the correct order is exactly the order given in the theory.
+  SOURCE (answers): a multi-step sequence from the theory — any ordered list in the theory
+  (e.g. steps in the scenario, reading, dialogue, listening, or wrapup). Shuffle the items; the correct order is exactly the order given in the theory.
   STEM: a sequencing instruction naming the workflow.
 
 RULES:

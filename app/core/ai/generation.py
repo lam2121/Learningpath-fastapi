@@ -9,6 +9,7 @@ then Prompt B-2 (1 call per topic -> 6 lesson shells each). Same retry/logging/
 rejection/exception-proofing conventions as Generator A.
 """
 
+import ast
 import asyncio
 import json
 import logging
@@ -81,6 +82,44 @@ def _find_first_list(node, depth: int = 0):
     return None
 
 
+def _strip_code_fences(text: str) -> str:
+    """Remove leading/trailing markdown code fences (``` or ```json)."""
+    lines = text.splitlines()
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _extract_json_start(text: str) -> str:
+    """Locate the first `[` or `{` and return everything from there.
+
+    Some models prepend preamble text (e.g. "Here is the JSON:") before the
+    actual payload despite explicit instructions.  This strips that prefix so
+    ``json.loads`` does not choke on it.
+    """
+    for i, ch in enumerate(text):
+        if ch in ("[", "{"):
+            trimmed = text[i:]
+            # Also strip trailing non-JSON text: find the last ] or } and
+            # drop anything after it (e.g. "```\\nEnd text").
+            for j in range(len(trimmed) - 1, -1, -1):
+                if trimmed[j] in ("]", "}"):
+                    return trimmed[: j + 1]
+            return trimmed
+    return text
+
+
+def _try_literal_eval(text: str):
+    """Fallback parser using ast.literal_eval for single-quoted Python literals.
+
+    Some models output single-quoted strings (valid Python, invalid JSON).
+    This safely parses that format as a last resort before giving up.
+    """
+    return ast.literal_eval(text)
+
+
 def _parse_json(text: str):
     """Parse the raw model output as JSON, tolerating code fences.
 
@@ -90,15 +129,12 @@ def _parse_json(text: str):
     `{"lesson": {"sections": [...]}}`) so the validator sees the array.
     """
     cleaned = text.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.splitlines()
-        if lines and lines[0].strip().startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip().startswith("```"):
-            lines = lines[:-1]
-        cleaned = "\n".join(lines).strip()
-
-    parsed = json.loads(cleaned)
+    cleaned = _strip_code_fences(cleaned)
+    cleaned = _extract_json_start(cleaned)
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        parsed = _try_literal_eval(cleaned)
     if isinstance(parsed, list):
         return parsed
     if isinstance(parsed, dict):
@@ -184,12 +220,115 @@ def _insert_questions(db: Session, role_id: int, skill: str, rows: list) -> int:
     return len(rows)
 
 
+# ─── Post-processing normalizers ──────────────────────────────────────────────
+# LLMs frequently miscount when generating sequential groups (e.g. 21 topics
+# instead of 20, or 7 lessons instead of 6).  These normalizers trim or adjust
+# the output *before* validation so the validator always sees the correct count.
+
+VALID_SKILLS_LIST = ["D_doc", "C_comm", "T_trouble", "G_custom"]
+VALID_TIERS = ["tier_1", "tier_2"]
+EXPECTED_LESSON_TIERS = ["basic", "basic", "intermediate", "intermediate", "advanced", "advanced"]
+
+
+def _normalize_topic_outline(rows: list, baseline: dict) -> list:
+    """Trim B1 output to exactly 20 topics with correct skill distribution.
+
+    Strategy: remove excess topics from the most over-represented skill,
+    preferring to drop topics from the END of each skill group (preserving
+    the user's early topics).  If the count is already 20, return as-is.
+    """
+    NUM_TOPICS = 20
+    if len(rows) == NUM_TOPICS:
+        return rows
+
+    # Build expected counts per skill
+    expected = {s: baseline.get(s, 0) * NUM_TOPICS // 100 for s in VALID_SKILLS_LIST}
+
+    if len(rows) < NUM_TOPICS:
+        # Too few — rare, but return as-is; validator will report the error
+        # and the retry prompt will ask for correction.
+        logger.warning("B1 returned %d topics (expected %d); returning as-is", len(rows), NUM_TOPICS)
+        return rows
+
+    # len(rows) > NUM_TOPICS — trim excess
+    excess = len(rows) - NUM_TOPICS
+    logger.info("B1 returned %d topics; trimming %d excess", len(rows), excess)
+
+    # Count current distribution
+    counts = {s: 0 for s in VALID_SKILLS_LIST}
+    for row in rows:
+        if isinstance(row, list) and len(row) >= 2 and row[1] in counts:
+            counts[row[1]] += 1
+
+    # Calculate over-representation per skill (positive = has excess)
+    over_rep = {s: counts[s] - expected.get(s, 0) for s in VALID_SKILLS_LIST}
+    # Sort by most over-represented first
+    over_skills = sorted(
+        [s for s in VALID_SKILLS_LIST if over_rep[s] > 0],
+        key=lambda s: over_rep[s],
+        reverse=True,
+    )
+
+    trimmed = list(rows)
+    for skill in over_skills:
+        if excess <= 0:
+            break
+        # Find indices of topics for this skill (from the end, to preserve early ones)
+        skill_indices = [
+            i for i in range(len(trimmed) - 1, -1, -1)
+            if isinstance(trimmed[i], list) and len(trimmed[i]) >= 2 and trimmed[i][1] == skill
+        ]
+        while skill_indices and excess > 0 and counts[skill] > expected.get(skill, 0):
+            idx = skill_indices.pop(0)  # remove from end
+            trimmed.pop(idx)
+            counts[skill] -= 1
+            excess -= 1
+
+    # If still excess (all skills at expected but total still over), trim from
+    # the skill with the most topics regardless
+    if excess > 0:
+        for skill in sorted(VALID_SKILLS_LIST, key=lambda s: counts[s], reverse=True):
+            if excess <= 0:
+                break
+            skill_indices = [
+                i for i in range(len(trimmed) - 1, -1, -1)
+                if isinstance(trimmed[i], list) and len(trimmed[i]) >= 2 and trimmed[i][1] == skill
+            ]
+            while skill_indices and excess > 0:
+                idx = skill_indices.pop(0)
+                trimmed.pop(idx)
+                counts[skill] -= 1
+                excess -= 1
+
+    logger.info("After normalization: %d topics, distribution: %s", len(trimmed), counts)
+    return trimmed
+
+
+def _normalize_lesson_shells(rows: list, topic_skill: str) -> list:
+    """Trim B2 output to exactly 6 lessons while preserving tier ordering.
+
+    Strategy: keep the first 6 rows (preserves basic→intermediate→advanced
+    order).  If the count is already 6, return as-is.
+    """
+    NUM_LESSONS = 6
+    if len(rows) == NUM_LESSONS:
+        return rows
+
+    if len(rows) > NUM_LESSONS:
+        logger.info("B2 returned %d lessons; trimming to %d", len(rows), NUM_LESSONS)
+        return rows[:NUM_LESSONS]
+
+    # len(rows) < NUM_LESSONS — rare, return as-is; validator will report
+    logger.warning("B2 returned %d lessons (expected %d); returning as-is", len(rows), NUM_LESSONS)
+    return rows
+
+
 async def _generate_skill_block(
     client: GeminiClientPool, role: JobRole, skill: str
 ) -> tuple:
     """
     Run Prompt A for one skill with retries. Returns
-    (rows | None, usage_logs, error | None).
+    (rows | None, usage_logs, error | None, raw_response | None, validator_checks | None).
     """
     prompt = build_prompt_a(
         role=role.name,
@@ -202,16 +341,32 @@ async def _generate_skill_block(
 
     usage_logs: list[dict] = []
     last_error = ""
+    last_raw: str | None = None
+    last_checks: dict | None = None
 
     for attempt in range(MAX_ATTEMPTS):
         call_prompt = prompt if attempt == 0 else retry_prompt_a(prompt, last_error)
-        response: LLMResponse = await client.generate_json(call_prompt)
+        try:
+            response: LLMResponse = await client.generate_json(call_prompt)
+        except GenerationError as exc:
+            last_error = f"Provider error: {exc}"
+            usage_logs.append(
+                {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "status": "retry",
+                    "provider": "none",
+                    "model": "none",
+                }
+            )
+            continue
         prompt_t, comp_t = extract_usage(response)
         raw = response.text
+        last_raw = raw
 
         try:
             rows = _parse_json(raw)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, ValueError) as exc:
             last_error = f"Invalid JSON: {exc}"
             usage_logs.append(
                 {
@@ -225,6 +380,7 @@ async def _generate_skill_block(
             continue
 
         result = validate_placement_block(rows, skill)
+        last_checks = result
         if result["ok"]:
             usage_logs.append(
                 {
@@ -235,7 +391,7 @@ async def _generate_skill_block(
                     "model": response.model,
                 }
             )
-            return rows, usage_logs, None
+            return rows, usage_logs, None, last_raw, last_checks
 
         if result["errors"]:
             last_error = "; ".join(result["errors"][:3])
@@ -253,7 +409,7 @@ async def _generate_skill_block(
                         "model": response.model,
                     }
                 )
-                return rows, usage_logs, None
+                return rows, usage_logs, None, last_raw, last_checks
 
         usage_logs.append(
             {
@@ -265,7 +421,13 @@ async def _generate_skill_block(
             }
         )
 
-    return None, usage_logs, (last_error or f"Skill block '{skill}' failed")
+    return (
+        None,
+        usage_logs,
+        (last_error or f"Skill block '{skill}' failed"),
+        last_raw,
+        last_checks,
+    )
 
 
 async def generate_placement_for_role(role_id: int) -> dict:
@@ -353,11 +515,21 @@ async def generate_placement_for_role(role_id: int) -> dict:
 
             for skill in SKILLS:
                 try:
-                    rows, usage_logs, error = await _generate_skill_block(
-                        client, role, skill
-                    )
+                    (
+                        rows,
+                        usage_logs,
+                        error,
+                        raw_resp,
+                        val_checks,
+                    ) = await _generate_skill_block(client, role, skill)
                 except (GenerationError, KillSwitchError) as exc:
-                    rows, usage_logs, error = None, [], str(exc)
+                    rows, usage_logs, error, raw_resp, val_checks = (
+                        None,
+                        [],
+                        str(exc),
+                        None,
+                        None,
+                    )
 
                 for log in usage_logs:
                     _log_usage(
@@ -383,8 +555,8 @@ async def generate_placement_for_role(role_id: int) -> dict:
                         role_id,
                         f"role={role.name}, skill={skill}",
                         error or "unknown",
-                        None,
-                        None,
+                        raw_resp,
+                        val_checks,
                     )
                     _log_usage(db, "A", role_id, 0, 0, "rejected")
                     db.commit()
@@ -407,6 +579,10 @@ async def generate_placement_for_role(role_id: int) -> dict:
             logger.exception("Generator A crashed for role %s", role_id)
             if gen is not None:
                 db.rollback()
+                _record_rejected(
+                    db, "A", role_id, f"role={role.name}", str(exc), None, None
+                )
+                _log_usage(db, "A", role_id, 0, 0, "rejected")
                 gen.status = "failed"
                 gen.error_message = str(exc)[:500]
                 gen.finished_at = datetime.now(timezone.utc)
@@ -422,7 +598,7 @@ async def generate_placement_for_role(role_id: int) -> dict:
 async def _generate_topic_outline(client: GeminiClientPool, role: JobRole) -> tuple:
     """
     Run Prompt B-1 for a role with retries. Returns
-    (rows | None, usage_logs, error | None).
+    (rows | None, usage_logs, error | None, raw_response | None, validator_checks | None).
     """
     prompt = build_prompt_b1(
         role=role.name,
@@ -436,16 +612,32 @@ async def _generate_topic_outline(client: GeminiClientPool, role: JobRole) -> tu
     usage_logs: list[dict] = []
     last_error = ""
     baseline = role.baseline or {}
+    last_raw: str | None = None
+    last_checks: dict | None = None
 
     for attempt in range(MAX_ATTEMPTS):
         call_prompt = prompt if attempt == 0 else retry_prompt_b1(prompt, last_error)
-        response: LLMResponse = await client.generate_json(call_prompt)
+        try:
+            response: LLMResponse = await client.generate_json(call_prompt)
+        except GenerationError as exc:
+            last_error = f"Provider error: {exc}"
+            usage_logs.append(
+                {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "status": "retry",
+                    "provider": "none",
+                    "model": "none",
+                }
+            )
+            continue
         prompt_t, comp_t = extract_usage(response)
         raw = response.text
+        last_raw = raw
 
         try:
             rows = _parse_json(raw)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, ValueError) as exc:
             last_error = f"Invalid JSON: {exc}"
             usage_logs.append(
                 {
@@ -458,7 +650,9 @@ async def _generate_topic_outline(client: GeminiClientPool, role: JobRole) -> tu
             )
             continue
 
+        rows = _normalize_topic_outline(rows, baseline)
         result = validate_topic_outline(rows, baseline)
+        last_checks = result
         if result["ok"]:
             usage_logs.append(
                 {
@@ -469,7 +663,7 @@ async def _generate_topic_outline(client: GeminiClientPool, role: JobRole) -> tu
                     "model": response.model,
                 }
             )
-            return rows, usage_logs, None
+            return rows, usage_logs, None, last_raw, last_checks
 
         if result["errors"]:
             last_error = "; ".join(result["errors"][:3])
@@ -487,7 +681,7 @@ async def _generate_topic_outline(client: GeminiClientPool, role: JobRole) -> tu
                         "model": response.model,
                     }
                 )
-                return rows, usage_logs, None
+                return rows, usage_logs, None, last_raw, last_checks
 
         usage_logs.append(
             {
@@ -499,7 +693,13 @@ async def _generate_topic_outline(client: GeminiClientPool, role: JobRole) -> tu
             }
         )
 
-    return None, usage_logs, (last_error or "Topic outline generation failed")
+    return (
+        None,
+        usage_logs,
+        (last_error or "Topic outline generation failed"),
+        last_raw,
+        last_checks,
+    )
 
 
 async def _generate_lesson_shells(
@@ -507,7 +707,7 @@ async def _generate_lesson_shells(
 ) -> tuple:
     """
     Run Prompt B-2 for one topic with retries. Returns
-    (rows | None, usage_logs, error | None).
+    (rows | None, usage_logs, error | None, raw_response | None, validator_checks | None).
     """
     prompt = build_prompt_b2(
         role=role.name,
@@ -518,16 +718,32 @@ async def _generate_lesson_shells(
 
     usage_logs: list[dict] = []
     last_error = ""
+    last_raw: str | None = None
+    last_checks: dict | None = None
 
     for attempt in range(MAX_ATTEMPTS):
         call_prompt = prompt if attempt == 0 else retry_prompt_b2(prompt, last_error)
-        response: LLMResponse = await client.generate_json(call_prompt)
+        try:
+            response: LLMResponse = await client.generate_json(call_prompt)
+        except GenerationError as exc:
+            last_error = f"Provider error: {exc}"
+            usage_logs.append(
+                {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "status": "retry",
+                    "provider": "none",
+                    "model": "none",
+                }
+            )
+            continue
         prompt_t, comp_t = extract_usage(response)
         raw = response.text
+        last_raw = raw
 
         try:
             rows = _parse_json(raw)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, ValueError) as exc:
             last_error = f"Invalid JSON: {exc}"
             usage_logs.append(
                 {
@@ -540,7 +756,9 @@ async def _generate_lesson_shells(
             )
             continue
 
+        rows = _normalize_lesson_shells(rows, topic.primary_skill)
         result = validate_lesson_shells(rows, topic.primary_skill)
+        last_checks = result
         if result["ok"]:
             usage_logs.append(
                 {
@@ -551,7 +769,7 @@ async def _generate_lesson_shells(
                     "model": response.model,
                 }
             )
-            return rows, usage_logs, None
+            return rows, usage_logs, None, last_raw, last_checks
 
         last_error = "; ".join(result["errors"][:3])
         usage_logs.append(
@@ -564,7 +782,13 @@ async def _generate_lesson_shells(
             }
         )
 
-    return None, usage_logs, (last_error or "Lesson shells generation failed")
+    return (
+        None,
+        usage_logs,
+        (last_error or "Lesson shells generation failed"),
+        last_raw,
+        last_checks,
+    )
 
 
 def _insert_topics(db: Session, role_id: int, rows: list) -> int:
@@ -698,9 +922,13 @@ async def generate_course_for_role(role_id: int) -> dict:
             # ── B-1: 20 topics ──────────────────────────────────────────────
             gen.step = "b1"
             db.commit()
-            topic_rows, usage_logs, b1_error = await _generate_topic_outline(
-                client, role
-            )
+            (
+                topic_rows,
+                usage_logs,
+                b1_error,
+                b1_raw,
+                b1_checks,
+            ) = await _generate_topic_outline(client, role)
             for log in usage_logs:
                 _log_usage(
                     db,
@@ -734,8 +962,8 @@ async def generate_course_for_role(role_id: int) -> dict:
                     role_id,
                     f"role={role.name}",
                     b1_error or "unknown",
-                    None,
-                    None,
+                    b1_raw,
+                    b1_checks,
                 )
                 _log_usage(db, "B1", role_id, 0, 0, "rejected")
                 db.commit()
@@ -747,9 +975,13 @@ async def generate_course_for_role(role_id: int) -> dict:
                 for topic in topics:
                     gen.step = "b2"
                     db.commit()
-                    shell_rows, usage_logs, b2_error = await _generate_lesson_shells(
-                        client, role, topic
-                    )
+                    (
+                        shell_rows,
+                        usage_logs,
+                        b2_error,
+                        b2_raw,
+                        b2_checks,
+                    ) = await _generate_lesson_shells(client, role, topic)
                     for log in usage_logs:
                         _log_usage(
                             db,
@@ -772,8 +1004,8 @@ async def generate_course_for_role(role_id: int) -> dict:
                             role_id,
                             f"role={role.name}, topic={topic.name}",
                             b2_error or "unknown",
-                            None,
-                            None,
+                            b2_raw,
+                            b2_checks,
                         )
                         _log_usage(db, "B2", role_id, 0, 0, "rejected")
                         db.commit()
@@ -803,6 +1035,10 @@ async def generate_course_for_role(role_id: int) -> dict:
             logger.exception("Generator B crashed for role %s", role_id)
             if gen is not None:
                 db.rollback()
+                _record_rejected(
+                    db, "B1", role_id, f"role={role.name}", str(exc), None, None
+                )
+                _log_usage(db, "B1", role_id, 0, 0, "rejected")
                 gen.status = "failed"
                 gen.error_message = str(exc)[:500]
                 gen.finished_at = datetime.now(timezone.utc)
@@ -837,15 +1073,12 @@ def _parse_json_object(text: str) -> dict:
     ordering:[...]}` dict would be destroyed by `_parse_json`'s unwrap logic.
     """
     cleaned = text.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.splitlines()
-        if lines and lines[0].strip().startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip().startswith("```"):
-            lines = lines[:-1]
-        cleaned = "\n".join(lines).strip()
-
-    parsed = json.loads(cleaned)
+    cleaned = _strip_code_fences(cleaned)
+    cleaned = _extract_json_start(cleaned)
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        parsed = _try_literal_eval(cleaned)
     if isinstance(parsed, dict):
         return parsed
     raise ValueError(f"Expected a JSON object, got {type(parsed).__name__}")
@@ -856,7 +1089,7 @@ async def _generate_lesson_theory(
 ) -> tuple:
     """
     Run Prompt C-1 (8-section theory) for one lesson with retries. Returns
-    (rows | None, usage_logs, error | None).
+    (rows | None, usage_logs, error | None, raw_response | None, validator_checks | None).
     """
     prompt = build_prompt_c1(
         role=role.name,
@@ -870,16 +1103,32 @@ async def _generate_lesson_theory(
 
     usage_logs: list[dict] = []
     last_error = ""
+    last_raw: str | None = None
+    last_checks: dict | None = None
 
     for attempt in range(MAX_ATTEMPTS):
         call_prompt = prompt if attempt == 0 else retry_prompt_c1(prompt, last_error)
-        response: LLMResponse = await client.generate_json(
-            call_prompt,
-            max_output_tokens=C1_MAX_OUTPUT_TOKENS,
-            model=app_config.GEMINI_PRO_MODEL,
-        )
+        try:
+            response: LLMResponse = await client.generate_json(
+                call_prompt,
+                max_output_tokens=C1_MAX_OUTPUT_TOKENS,
+                model=app_config.GEMINI_PRO_MODEL,
+            )
+        except GenerationError as exc:
+            last_error = f"Provider error: {exc}"
+            usage_logs.append(
+                {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "status": "retry",
+                    "provider": "none",
+                    "model": "none",
+                }
+            )
+            continue
         prompt_t, comp_t = extract_usage(response)
         raw = response.text
+        last_raw = raw
 
         try:
             rows = _parse_json(raw)
@@ -897,6 +1146,7 @@ async def _generate_lesson_theory(
             continue
 
         result = validate_theory_content(rows)
+        last_checks = result
         if result["ok"]:
             usage_logs.append(
                 {
@@ -907,7 +1157,7 @@ async def _generate_lesson_theory(
                     "model": response.model,
                 }
             )
-            return rows, usage_logs, None
+            return rows, usage_logs, None, last_raw, last_checks
 
         if result["errors"]:
             last_error = "; ".join(result["errors"][:3])
@@ -925,7 +1175,7 @@ async def _generate_lesson_theory(
                         "model": response.model,
                     }
                 )
-                return rows, usage_logs, None
+                return rows, usage_logs, None, last_raw, last_checks
 
         usage_logs.append(
             {
@@ -937,7 +1187,13 @@ async def _generate_lesson_theory(
             }
         )
 
-    return None, usage_logs, (last_error or "Theory content generation failed")
+    return (
+        None,
+        usage_logs,
+        (last_error or "Theory content generation failed"),
+        last_raw,
+        last_checks,
+    )
 
 
 async def _generate_lesson_quiz(
@@ -949,7 +1205,7 @@ async def _generate_lesson_quiz(
 ) -> tuple:
     """
     Run Prompt C-2 (30-question quiz grounded in the theory) for one lesson
-    with retries. Returns (obj | None, usage_logs, error | None).
+    with retries. Returns (obj | None, usage_logs, error | None, raw_response | None, validator_checks | None).
     """
     prompt = build_prompt_c2(
         role=role.name,
@@ -963,17 +1219,33 @@ async def _generate_lesson_quiz(
 
     usage_logs: list[dict] = []
     last_error = ""
+    last_raw: str | None = None
+    last_checks: dict | None = None
 
     for attempt in range(MAX_ATTEMPTS):
         call_prompt = prompt if attempt == 0 else retry_prompt_c2(prompt, last_error)
-        response: LLMResponse = await client.generate_json(
-            call_prompt,
-            temperature=C2_TEMPERATURE,
-            max_output_tokens=C2_MAX_OUTPUT_TOKENS,
-            model=app_config.GEMINI_PRO_MODEL,
-        )
+        try:
+            response: LLMResponse = await client.generate_json(
+                call_prompt,
+                temperature=C2_TEMPERATURE,
+                max_output_tokens=C2_MAX_OUTPUT_TOKENS,
+                model=app_config.GEMINI_PRO_MODEL,
+            )
+        except GenerationError as exc:
+            last_error = f"Provider error: {exc}"
+            usage_logs.append(
+                {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "status": "retry",
+                    "provider": "none",
+                    "model": "none",
+                }
+            )
+            continue
         prompt_t, comp_t = extract_usage(response)
         raw = response.text
+        last_raw = raw
 
         try:
             obj = _parse_json_object(raw)
@@ -991,6 +1263,7 @@ async def _generate_lesson_quiz(
             continue
 
         result = validate_quiz_content(obj)
+        last_checks = result
         if result["ok"]:
             usage_logs.append(
                 {
@@ -1001,7 +1274,7 @@ async def _generate_lesson_quiz(
                     "model": response.model,
                 }
             )
-            return obj, usage_logs, None
+            return obj, usage_logs, None, last_raw, last_checks
 
         last_error = "; ".join(result["errors"][:3])
         usage_logs.append(
@@ -1014,7 +1287,13 @@ async def _generate_lesson_quiz(
             }
         )
 
-    return None, usage_logs, (last_error or "Lesson quiz generation failed")
+    return (
+        None,
+        usage_logs,
+        (last_error or "Lesson quiz generation failed"),
+        last_raw,
+        last_checks,
+    )
 
 
 async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dict:
@@ -1064,9 +1343,13 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
             client = GeminiClientPool()
 
             # ── C-1: theory ──────────────────────────────────────────────────
-            theory, theory_usage, theory_error = await _generate_lesson_theory(
-                client, role, topic, lesson
-            )
+            (
+                theory,
+                theory_usage,
+                theory_error,
+                c1_raw,
+                c1_checks,
+            ) = await _generate_lesson_theory(client, role, topic, lesson)
             for log in theory_usage:
                 _log_usage(
                     db,
@@ -1085,17 +1368,21 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
                     role_id,
                     f"lesson={lesson.title}",
                     theory_error or "unknown",
-                    None,
-                    None,
+                    c1_raw,
+                    c1_checks,
                 )
                 _log_usage(db, "C1", role_id, 0, 0, "rejected")
                 db.commit()
                 return {"status": "failed", "error": theory_error or "C-1 failed"}
 
             # ── C-2: quiz (grounded in the generated theory) ─────────────────
-            quiz, quiz_usage, quiz_error = await _generate_lesson_quiz(
-                client, role, topic, lesson, theory
-            )
+            (
+                quiz,
+                quiz_usage,
+                quiz_error,
+                c2_raw,
+                c2_checks,
+            ) = await _generate_lesson_quiz(client, role, topic, lesson, theory)
             for log in quiz_usage:
                 _log_usage(
                     db,
@@ -1114,8 +1401,8 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
                     role_id,
                     f"lesson={lesson.title}",
                     quiz_error or "unknown",
-                    None,
-                    None,
+                    c2_raw,
+                    c2_checks,
                 )
                 _log_usage(db, "C2", role_id, 0, 0, "rejected")
                 db.commit()
@@ -1134,6 +1421,11 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
         except Exception as exc:
             logger.exception("Generator C crashed for lesson %s", lesson_id)
             db.rollback()
+            _record_rejected(
+                db, "C1", role_id, f"lesson={lesson.title}", str(exc), None, None
+            )
+            _log_usage(db, "C1", role_id, 0, 0, "rejected")
+            db.commit()
             return {"status": "failed", "error": str(exc)}
         finally:
             db.close()

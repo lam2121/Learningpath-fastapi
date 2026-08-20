@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Float, JSON, ForeignKey, Index, text
+from sqlalchemy import Column, String, DateTime, Float, JSON, ForeignKey, Index, text, Integer
 from sqlalchemy.dialects.mysql import BIGINT
 from app.core.database import Base
 
@@ -13,6 +13,8 @@ class UserLesson(Base):
     id = Column(BIGINT, primary_key=True, autoincrement=True, nullable=False) #[cite: 2]
     user_id = Column(BIGINT, ForeignKey('user.id', ondelete='CASCADE', onupdate='CASCADE'), nullable=False) #[cite: 2]
     lesson_id = Column(BIGINT, ForeignKey('lesson.id', ondelete='CASCADE', onupdate='CASCADE'), nullable=False) #[cite: 2]
+    attempt_count = Column(Integer, nullable=False, server_default='0')
+    failed_attempts = Column(Integer, nullable=False, server_default='0')
     user_answers = Column(JSON, nullable=False, comment='Luu ket qua 30 cau quiz cua lesson') #[cite: 2]
     status = Column(String(20), nullable=False, server_default='locked', comment='locked / in_progress / completed') #[cite: 2]
     completed_at = Column(DateTime, nullable=True) #[cite: 2]

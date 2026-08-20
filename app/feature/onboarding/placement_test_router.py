@@ -1,7 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.config import app_config
 from app.core.database import get_db
 from app.core.dependencies import get_current_user_optional
 from app.core.roadmap import lesson_is_assigned
@@ -19,8 +18,17 @@ from app.feature.onboarding.placement_test_service import (
     get_user_roadmap,
     recompute_roadmap,
 )
+from app.feature.onboarding.lesson_quiz_service import (
+    get_lesson_quiz_result_detail,
+    get_lesson_quiz_state,
+    submit_lesson_quiz,
+)
 from app.feature.onboarding.roadmap_schema import (
     LessonGenerateResponse,
+    LessonQuizResultDetailResponse,
+    LessonQuizStateResponse,
+    LessonQuizSubmitRequest,
+    LessonQuizSubmitResponse,
     RoadmapResponse,
     RoadmapSelectRequest,
 )
@@ -189,6 +197,34 @@ def _resolve_user_id(db: Session, current_user: User | None) -> int:
     return fallback_user.id
 
 
+def _get_owned_assigned_lesson(db: Session, user_id: int, lesson_id: int) -> Lesson:
+    lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
+    if lesson is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Lesson not found"
+        )
+
+    owned = (
+        db.query(UserRoadmap)
+        .filter(
+            UserRoadmap.user_id == user_id,
+            UserRoadmap.topic_id == lesson.topic_id,
+        )
+        .first()
+    )
+    if owned is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Lesson does not belong to your roadmap",
+        )
+    if not lesson_is_assigned(owned.track, lesson.difficulty_tier):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Lesson is not assigned for your track",
+        )
+    return lesson
+
+
 @router.get(
     "/roadmap",
     response_model=RoadmapResponse,
@@ -236,53 +272,85 @@ def select_roadmap_endpoint(
 )
 async def generate_roadmap_lesson(
     lesson_id: int,
+    background_tasks: BackgroundTasks,
     force: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_current_user_optional),
 ):
     """
-    Dev-mode (synchronous) C-1 + C-2 generation for one roadmap lesson
-    (§12.9). The lesson must belong to a topic in the caller's roadmap.
-    Dev-gated: returns 404 in production (can graduate to the real study flow).
+    Kick off background C-1 + C-2 generation for one roadmap lesson that belongs
+    to the caller's roadmap.
     """
-    if app_config.APP_ENV == "production":
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Dev-mode lesson generation is disabled in production",
-        )
-
     user_id = _resolve_user_id(db, current_user)
 
-    lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
-    if lesson is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Lesson not found"
+    lesson = _get_owned_assigned_lesson(db, user_id, lesson_id)
+
+    if lesson.is_generated and not force:
+        return LessonGenerateResponse(
+            lesson_id=lesson_id,
+            status="completed",
+            message="Lesson already generated and ready to study",
         )
 
-    owned = (
-        db.query(UserRoadmap)
-        .filter(
-            UserRoadmap.user_id == user_id,
-            UserRoadmap.topic_id == lesson.topic_id,
-        )
-        .first()
-    )
-    if owned is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Lesson does not belong to your roadmap",
-        )
-    if not lesson_is_assigned(owned.track, lesson.difficulty_tier):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Lesson is not assigned for your track",
-        )
-
+    from app.feature.admin import admin_service
     from app.core.ai.generation import generate_lesson_content
 
-    result = await generate_lesson_content(lesson_id, force=force)
+    info = admin_service.kickoff_lesson_generation(db, lesson_id, force=force)
+    background_tasks.add_task(generate_lesson_content, lesson_id, force=force)
     return LessonGenerateResponse(
         lesson_id=lesson_id,
-        status=result.get("status", "failed"),
-        message=result.get("message") or result.get("error") or "unknown",
+        status="started",
+        message=info["message"],
     )
+
+
+@router.get(
+    "/roadmap/lessons/{lesson_id}/quiz",
+    response_model=LessonQuizStateResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_lesson_quiz_state_endpoint(
+    lesson_id: int,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    user_id = _resolve_user_id(db, current_user)
+    lesson = _get_owned_assigned_lesson(db, user_id, lesson_id)
+    return get_lesson_quiz_state(db, user_id, lesson)
+
+
+@router.post(
+    "/roadmap/lessons/{lesson_id}/quiz/submit",
+    response_model=LessonQuizSubmitResponse,
+    status_code=status.HTTP_200_OK,
+)
+def submit_lesson_quiz_endpoint(
+    lesson_id: int,
+    request: LessonQuizSubmitRequest,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    user_id = _resolve_user_id(db, current_user)
+    lesson = _get_owned_assigned_lesson(db, user_id, lesson_id)
+    return submit_lesson_quiz(
+        db,
+        user_id,
+        lesson,
+        question_order=request.question_order,
+        submitted_answers=[answer.model_dump() for answer in request.answers],
+    )
+
+
+@router.get(
+    "/roadmap/lessons/{lesson_id}/quiz/result",
+    response_model=LessonQuizResultDetailResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_lesson_quiz_result_detail_endpoint(
+    lesson_id: int,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    user_id = _resolve_user_id(db, current_user)
+    lesson = _get_owned_assigned_lesson(db, user_id, lesson_id)
+    return get_lesson_quiz_result_detail(db, user_id, lesson)

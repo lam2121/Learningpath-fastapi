@@ -34,11 +34,42 @@ class UserResponse(UserBase):
         from_attributes = True
 
 
+class StudyHistoryEntryResponse(BaseModel):
+    studied_on: date
+    minutes: int = 0
+
+
+class LessonQuizHistoryEntryResponse(BaseModel):
+    lesson_id: int
+    lesson_title: str
+    topic_name: str | None = None
+    skill: str
+    difficulty_tier: str
+    status: str
+    best_score_percent: float | None = None
+    passed: bool = False
+    attempt_count: int = 0
+    failed_attempts: int = 0
+    correct_no_hint_count: int = 0
+    total_no_hint_questions: int = 0
+    correct_with_hint_count: int = 0
+    total_with_hint_questions: int = 0
+    total_questions: int = 0
+    recorded_at: datetime | None = None
+    completed_at: datetime | None = None
+    last_submitted_at: datetime | None = None
+
+
 class UserProfileResponse(UserResponse):
     started_at: datetime | None = None
     estimated_finish: date | None = None
     total_estimated_minutes: int = 0
     daily_study_minutes: int = 120
+    total_studied_minutes: int = 0
+    study_history: list[StudyHistoryEntryResponse] = []
+    lesson_quiz_history: list[LessonQuizHistoryEntryResponse] = []
+    initial_skill_scores: dict[str, float] | None = None
+    current_skill_scores: dict[str, float] | None = None
 
 
 class StudySettingsUpdateRequest(BaseModel):

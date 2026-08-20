@@ -1,5 +1,6 @@
 """Pydantic schemas for the user roadmap (Phase A, §12.3 / §12.9)."""
 
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -59,3 +60,79 @@ class LessonGenerateResponse(BaseModel):
     lesson_id: int
     status: str
     message: str
+
+
+class LessonQuizAnswerSubmission(BaseModel):
+    question_id: str
+    question_type: str
+    answer: str = ""
+    used_hint: bool = False
+
+
+class LessonQuizSubmitRequest(BaseModel):
+    question_order: list[str] = []
+    answers: list[LessonQuizAnswerSubmission]
+
+
+class LessonQuizQuestionResultResponse(BaseModel):
+    question_id: str
+    question_type: str
+    question_text: str = ""
+    options: list[str] = []
+    user_answer: str
+    correct_answer: str
+    explanation: str
+    is_correct: bool
+    used_hint: bool
+
+
+class LessonQuizStateResponse(BaseModel):
+    lesson_id: int
+    skill: str
+    status: str
+    lesson_passed: bool
+    best_score_percent: float
+    attempt_count: int
+    failed_attempts: int
+    completed_at: datetime | None = None
+    current_skill_score: float | None = None
+    first_pass_score_percent: float | None = None
+
+
+class LessonQuizSavedAnswerResponse(BaseModel):
+    question_id: str
+    question_type: str
+    answer: str
+    used_hint: bool
+
+
+class LessonQuizResultDetailResponse(BaseModel):
+    lesson_id: int
+    lesson_title: str
+    topic_name: str | None = None
+    skill: str
+    difficulty_tier: str
+    status: str
+    best_score_percent: float | None = None
+    attempt_count: int = 0
+    failed_attempts: int = 0
+    correct_no_hint_count: int = 0
+    total_no_hint_questions: int = 0
+    correct_with_hint_count: int = 0
+    total_with_hint_questions: int = 0
+    total_questions: int = 0
+    recorded_at: datetime | None = None
+    question_order: list[str] = []
+    answers: list[LessonQuizSavedAnswerResponse] = []
+    question_results: list[LessonQuizQuestionResultResponse] = []
+
+
+class LessonQuizSubmitResponse(LessonQuizStateResponse):
+    current_attempt_passed: bool
+    weighted_score_percent: float
+    correct_no_hint_count: int
+    correct_with_hint_count: int
+    total_questions: int
+    first_pass_radar_applied: bool
+    current_attempt_is_new_best: bool
+    question_results: list[LessonQuizQuestionResultResponse]

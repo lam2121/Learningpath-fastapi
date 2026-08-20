@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.feature.audio.audio_schema import (
     STTResponse,
@@ -38,11 +38,17 @@ async def stream_tts(
 ):
     """
     Stream MP3 audio directly for instant playback in <audio> tags or web players.
-    Cached responses return instantly.
+    Cached files return instantly with Content-Length and Range support for precise seeking and duration display.
     """
     try:
-        return StreamingResponse(
-            stream_audio_chunks(text=text, voice=voice, rate=rate, pitch=pitch),
+        file_path, _ = await synthesize_to_file(
+            text=text,
+            voice=voice,
+            rate=rate,
+            pitch=pitch,
+        )
+        return FileResponse(
+            path=str(file_path),
             media_type="audio/mpeg",
             headers={
                 "Cache-Control": "public, max-age=31536000, immutable",

@@ -42,14 +42,15 @@ SKILL_TAG_TO_SHORT = {
 # level column stores plain strings: 'Easy' | 'Medium' | 'Hard' | 'Expert'
 
 # Difficulty-weighted scoring (spec §3)
-# Each skill: 4×Easy (weight 1) + 4×Medium (weight 2) + 4×Hard (weight 3) = 4 + 8 + 12 = 24
+# Each skill: 3×Easy (weight 1) + 3×Medium (weight 2) + 3×Hard (weight 3) + 3×Expert (weight 4)
+# = 3 + 6 + 9 + 12 = 30
 DIFFICULTY_WEIGHT: dict[str, int] = {
     "Easy": 1,
     "Medium": 2,
     "Hard": 3,
     "Expert": 4,
 }
-MAX_SKILL_WEIGHT = 24  # 4×1 + 4×2 + 4×3
+MAX_SKILL_WEIGHT = 30
 
 
 def fetch_questions_by_role(

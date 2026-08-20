@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -5,8 +6,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api_router import api_router
+from app.feature.audio.tts_service import clean_audio_cache
 
-app = FastAPI(title="TOEIC Learning Path API")
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Startup / shutdown lifecycle hook."""
+    # Clean stale audio cache on boot
+    clean_audio_cache()
+    yield
+
+
+app = FastAPI(title="TOEIC Learning Path API", lifespan=lifespan)
 
 # Ensure static directory exists
 STATIC_DIR = Path("static")

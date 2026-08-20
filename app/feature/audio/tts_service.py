@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import ssl
+import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
@@ -17,6 +18,64 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path("static")
 AUDIO_CACHE_DIR = STATIC_DIR / "audio_cache"
 AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# ── Audio Cache LRU Eviction Configuration ──────────────────────────────
+MAX_CACHE_SIZE_MB = 100          # Maximum total cache folder size in MB
+MAX_FILE_AGE_SECONDS = 7 * 86400 # Auto-delete files not accessed for 7 days
+
+
+def clean_audio_cache() -> None:
+    """
+    Automatic LRU cache cleanup.
+    1. Purge files older than MAX_FILE_AGE_SECONDS (7 days by default).
+    2. If total size still exceeds MAX_CACHE_SIZE_MB, evict oldest files first.
+    """
+    if not AUDIO_CACHE_DIR.exists():
+        return
+
+    now = time.time()
+    max_bytes = MAX_CACHE_SIZE_MB * 1024 * 1024
+
+    # Phase 1: Remove stale files beyond TTL
+    files = list(AUDIO_CACHE_DIR.glob("*.mp3"))
+    for f in files:
+        try:
+            stat = f.stat()
+            # Use last-access time (st_atime) for LRU, fall back to mtime
+            last_used = max(stat.st_atime, stat.st_mtime)
+            if now - last_used > MAX_FILE_AGE_SECONDS:
+                f.unlink()
+                logger.debug("Cache eviction (TTL): removed %s", f.name)
+        except OSError:
+            pass
+
+    # Phase 2: Enforce total size cap via LRU eviction
+    files = list(AUDIO_CACHE_DIR.glob("*.mp3"))
+    if not files:
+        return
+
+    # Sort by last access time ascending (oldest first)
+    files.sort(key=lambda p: max(p.stat().st_atime, p.stat().st_mtime))
+    total_size = sum(f.stat().st_size for f in files)
+
+    evicted = 0
+    for f in files:
+        if total_size <= max_bytes:
+            break
+        try:
+            fsize = f.stat().st_size
+            f.unlink()
+            total_size -= fsize
+            evicted += 1
+        except OSError:
+            pass
+
+    if evicted:
+        logger.info(
+            "Cache eviction (LRU): removed %d files, remaining size %.1f MB",
+            evicted,
+            total_size / (1024 * 1024),
+        )
 
 
 
@@ -171,6 +230,10 @@ async def synthesize_to_file(
     # Generate via edge-tts
     communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch)
     await communicate.save(str(output_path))
+
+    # Evict stale / oversized cache entries after writing a new file
+    clean_audio_cache()
+
     return output_path, False
 
 
@@ -210,6 +273,8 @@ async def stream_audio_chunks(
         try:
             async with aiofiles.open(cached_path, "wb") as f:
                 await f.write(buffer)
+            # Evict stale / oversized cache entries after writing a new file
+            clean_audio_cache()
         except OSError:
             logger.warning(f"Could not save cached audio to {cached_path}")
 

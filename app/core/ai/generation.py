@@ -220,6 +220,109 @@ def _insert_questions(db: Session, role_id: int, skill: str, rows: list) -> int:
     return len(rows)
 
 
+# ─── Post-processing normalizers ──────────────────────────────────────────────
+# LLMs frequently miscount when generating sequential groups (e.g. 21 topics
+# instead of 20, or 7 lessons instead of 6).  These normalizers trim or adjust
+# the output *before* validation so the validator always sees the correct count.
+
+VALID_SKILLS_LIST = ["D_doc", "C_comm", "T_trouble", "G_custom"]
+VALID_TIERS = ["tier_1", "tier_2"]
+EXPECTED_LESSON_TIERS = ["basic", "basic", "intermediate", "intermediate", "advanced", "advanced"]
+
+
+def _normalize_topic_outline(rows: list, baseline: dict) -> list:
+    """Trim B1 output to exactly 20 topics with correct skill distribution.
+
+    Strategy: remove excess topics from the most over-represented skill,
+    preferring to drop topics from the END of each skill group (preserving
+    the user's early topics).  If the count is already 20, return as-is.
+    """
+    NUM_TOPICS = 20
+    if len(rows) == NUM_TOPICS:
+        return rows
+
+    # Build expected counts per skill
+    expected = {s: baseline.get(s, 0) * NUM_TOPICS // 100 for s in VALID_SKILLS_LIST}
+
+    if len(rows) < NUM_TOPICS:
+        # Too few — rare, but return as-is; validator will report the error
+        # and the retry prompt will ask for correction.
+        logger.warning("B1 returned %d topics (expected %d); returning as-is", len(rows), NUM_TOPICS)
+        return rows
+
+    # len(rows) > NUM_TOPICS — trim excess
+    excess = len(rows) - NUM_TOPICS
+    logger.info("B1 returned %d topics; trimming %d excess", len(rows), excess)
+
+    # Count current distribution
+    counts = {s: 0 for s in VALID_SKILLS_LIST}
+    for row in rows:
+        if isinstance(row, list) and len(row) >= 2 and row[1] in counts:
+            counts[row[1]] += 1
+
+    # Calculate over-representation per skill (positive = has excess)
+    over_rep = {s: counts[s] - expected.get(s, 0) for s in VALID_SKILLS_LIST}
+    # Sort by most over-represented first
+    over_skills = sorted(
+        [s for s in VALID_SKILLS_LIST if over_rep[s] > 0],
+        key=lambda s: over_rep[s],
+        reverse=True,
+    )
+
+    trimmed = list(rows)
+    for skill in over_skills:
+        if excess <= 0:
+            break
+        # Find indices of topics for this skill (from the end, to preserve early ones)
+        skill_indices = [
+            i for i in range(len(trimmed) - 1, -1, -1)
+            if isinstance(trimmed[i], list) and len(trimmed[i]) >= 2 and trimmed[i][1] == skill
+        ]
+        while skill_indices and excess > 0 and counts[skill] > expected.get(skill, 0):
+            idx = skill_indices.pop(0)  # remove from end
+            trimmed.pop(idx)
+            counts[skill] -= 1
+            excess -= 1
+
+    # If still excess (all skills at expected but total still over), trim from
+    # the skill with the most topics regardless
+    if excess > 0:
+        for skill in sorted(VALID_SKILLS_LIST, key=lambda s: counts[s], reverse=True):
+            if excess <= 0:
+                break
+            skill_indices = [
+                i for i in range(len(trimmed) - 1, -1, -1)
+                if isinstance(trimmed[i], list) and len(trimmed[i]) >= 2 and trimmed[i][1] == skill
+            ]
+            while skill_indices and excess > 0:
+                idx = skill_indices.pop(0)
+                trimmed.pop(idx)
+                counts[skill] -= 1
+                excess -= 1
+
+    logger.info("After normalization: %d topics, distribution: %s", len(trimmed), counts)
+    return trimmed
+
+
+def _normalize_lesson_shells(rows: list, topic_skill: str) -> list:
+    """Trim B2 output to exactly 6 lessons while preserving tier ordering.
+
+    Strategy: keep the first 6 rows (preserves basic→intermediate→advanced
+    order).  If the count is already 6, return as-is.
+    """
+    NUM_LESSONS = 6
+    if len(rows) == NUM_LESSONS:
+        return rows
+
+    if len(rows) > NUM_LESSONS:
+        logger.info("B2 returned %d lessons; trimming to %d", len(rows), NUM_LESSONS)
+        return rows[:NUM_LESSONS]
+
+    # len(rows) < NUM_LESSONS — rare, return as-is; validator will report
+    logger.warning("B2 returned %d lessons (expected %d); returning as-is", len(rows), NUM_LESSONS)
+    return rows
+
+
 async def _generate_skill_block(
     client: GeminiClientPool, role: JobRole, skill: str
 ) -> tuple:
@@ -243,7 +346,20 @@ async def _generate_skill_block(
 
     for attempt in range(MAX_ATTEMPTS):
         call_prompt = prompt if attempt == 0 else retry_prompt_a(prompt, last_error)
-        response: LLMResponse = await client.generate_json(call_prompt)
+        try:
+            response: LLMResponse = await client.generate_json(call_prompt)
+        except GenerationError as exc:
+            last_error = f"Provider error: {exc}"
+            usage_logs.append(
+                {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "status": "retry",
+                    "provider": "none",
+                    "model": "none",
+                }
+            )
+            continue
         prompt_t, comp_t = extract_usage(response)
         raw = response.text
         last_raw = raw
@@ -501,7 +617,20 @@ async def _generate_topic_outline(client: GeminiClientPool, role: JobRole) -> tu
 
     for attempt in range(MAX_ATTEMPTS):
         call_prompt = prompt if attempt == 0 else retry_prompt_b1(prompt, last_error)
-        response: LLMResponse = await client.generate_json(call_prompt)
+        try:
+            response: LLMResponse = await client.generate_json(call_prompt)
+        except GenerationError as exc:
+            last_error = f"Provider error: {exc}"
+            usage_logs.append(
+                {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "status": "retry",
+                    "provider": "none",
+                    "model": "none",
+                }
+            )
+            continue
         prompt_t, comp_t = extract_usage(response)
         raw = response.text
         last_raw = raw
@@ -521,6 +650,7 @@ async def _generate_topic_outline(client: GeminiClientPool, role: JobRole) -> tu
             )
             continue
 
+        rows = _normalize_topic_outline(rows, baseline)
         result = validate_topic_outline(rows, baseline)
         last_checks = result
         if result["ok"]:
@@ -593,7 +723,20 @@ async def _generate_lesson_shells(
 
     for attempt in range(MAX_ATTEMPTS):
         call_prompt = prompt if attempt == 0 else retry_prompt_b2(prompt, last_error)
-        response: LLMResponse = await client.generate_json(call_prompt)
+        try:
+            response: LLMResponse = await client.generate_json(call_prompt)
+        except GenerationError as exc:
+            last_error = f"Provider error: {exc}"
+            usage_logs.append(
+                {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "status": "retry",
+                    "provider": "none",
+                    "model": "none",
+                }
+            )
+            continue
         prompt_t, comp_t = extract_usage(response)
         raw = response.text
         last_raw = raw
@@ -613,6 +756,7 @@ async def _generate_lesson_shells(
             )
             continue
 
+        rows = _normalize_lesson_shells(rows, topic.primary_skill)
         result = validate_lesson_shells(rows, topic.primary_skill)
         last_checks = result
         if result["ok"]:
@@ -964,11 +1108,24 @@ async def _generate_lesson_theory(
 
     for attempt in range(MAX_ATTEMPTS):
         call_prompt = prompt if attempt == 0 else retry_prompt_c1(prompt, last_error)
-        response: LLMResponse = await client.generate_json(
-            call_prompt,
-            max_output_tokens=C1_MAX_OUTPUT_TOKENS,
-            model=app_config.GEMINI_PRO_MODEL,
-        )
+        try:
+            response: LLMResponse = await client.generate_json(
+                call_prompt,
+                max_output_tokens=C1_MAX_OUTPUT_TOKENS,
+                model=app_config.GEMINI_PRO_MODEL,
+            )
+        except GenerationError as exc:
+            last_error = f"Provider error: {exc}"
+            usage_logs.append(
+                {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "status": "retry",
+                    "provider": "none",
+                    "model": "none",
+                }
+            )
+            continue
         prompt_t, comp_t = extract_usage(response)
         raw = response.text
         last_raw = raw
@@ -1067,12 +1224,25 @@ async def _generate_lesson_quiz(
 
     for attempt in range(MAX_ATTEMPTS):
         call_prompt = prompt if attempt == 0 else retry_prompt_c2(prompt, last_error)
-        response: LLMResponse = await client.generate_json(
-            call_prompt,
-            temperature=C2_TEMPERATURE,
-            max_output_tokens=C2_MAX_OUTPUT_TOKENS,
-            model=app_config.GEMINI_PRO_MODEL,
-        )
+        try:
+            response: LLMResponse = await client.generate_json(
+                call_prompt,
+                temperature=C2_TEMPERATURE,
+                max_output_tokens=C2_MAX_OUTPUT_TOKENS,
+                model=app_config.GEMINI_PRO_MODEL,
+            )
+        except GenerationError as exc:
+            last_error = f"Provider error: {exc}"
+            usage_logs.append(
+                {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "status": "retry",
+                    "provider": "none",
+                    "model": "none",
+                }
+            )
+            continue
         prompt_t, comp_t = extract_usage(response)
         raw = response.text
         last_raw = raw

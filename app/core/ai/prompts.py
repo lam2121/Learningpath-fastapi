@@ -43,7 +43,7 @@ testing the "{target_skill}" skill.
 [OUTPUT CONSTRAINT]
 - Output ONLY a raw, valid JSON array of arrays.
 - NO markdown formatting, NO backticks, NO object keys, NO conversational text.
-- Start directly with [[ and end directly with ]].
+- Start directly with [ and end directly with ].
 
 [INPUT DATA]
 - Role: "{role}"
@@ -55,13 +55,13 @@ testing the "{target_skill}" skill.
 - Questions: {num_questions} per call (distribute as 3 questions per difficulty band)
 
 [REQUIREMENTS]
-1. Each inner array has EXACTLY 5 elements:
+1. Each inner array has EXACTLY 6 elements:
    Index 0: Target skill code (must be "{target_skill}")
    Index 1: Difficulty level (must be one of three: Easy, Medium, Hard)
    Index 2: Question text (max 100 words, authentic IT scenario)
    Index 3: "OptionA|OptionB|OptionC|OptionD" (pipe-separated)
    Index 4: Correct answer letter ("A", "B", "C", or "D")
-   Index 5: Must be Context layer or Language layer
+   Index 5: Expanded skill layer ("Context_layer" or "Language_layer")
 2. Distribute the {num_questions} questions across **3 difficulty bands** (4 questions per band):
    Band 1 = Easy (Tier 1 vocabulary), Band 2 = Medium,
    Band 3 = Hard (Tier 2 vocabulary).
@@ -72,7 +72,7 @@ testing the "{target_skill}" skill.
 [
   ["{target_skill}", "Easy", "During a meeting, the client presents an unclear requirement. Which response is most appropriate for seeking clarification without causing discomfort?", "What do you mean?|Could you elaborate a bit more on that requirement so I can make sure I capture it correctly?|That does not make sense to me.|I do not understand. Please explain.", "B","Context_layer"],
   ["{target_skill}", "Hard", "You need to reject a colleague's architectural proposal because you are concerned about its scalability. Which response demonstrates the most professional and constructive disagreement?", "This will not work; we need another approach.|I see the value in this approach, but I am concerned it might not scale well under peak load. Could we explore a caching layer as an alternative?|I disagree with this design.|Let us just do it my way instead.", "B","Context_layer"]
-  ["{target_skill}", "Easy", "Which sentence is the most grammatically correct and professional way for a Project Manager to provide a progress update?", "The team have complete the task yesterday.|The team completed the task yesterday and is now preparing the deliverables for review.|The team completing the task yesterday.|The task has complete by the team yesterday.", "B","Language layer"],
+  ["{target_skill}", "Easy", "Which sentence is the most grammatically correct and professional way for a Project Manager to provide a progress update?", "The team have complete the task yesterday.|The team completed the task yesterday and is now preparing the deliverables for review.|The team completing the task yesterday.|The task has complete by the team yesterday.", "B","Language_layer"],
   ["{target_skill}", "Medium", "Which Project Management term refers to the uncontrolled expansion of project requirements without corresponding adjustments to time, budget, or resources?", "Risk mitigation|Scope creep|Resource allocation|Quality assurance", "B","Language_layer"],
   ["{target_skill}", "Hard", "Which sentence communicates a potential project delay most fluently and professionally?", "The project will be late because the development team did not finish.|We regret to inform you that we cannot do it on time.|Due to an unexpected technical dependency, the milestone may be delayed by three working days; however, we are evaluating mitigation options to minimize the impact.|The deadline is impossible, so we need more time.", "C","Language_layer"]
 ]
@@ -122,12 +122,15 @@ Design a course outline of EXACTLY {num_topics} topics for the "{role}" role.
 {skill_definitions_block}
 
 [REQUIRED EXACT DISTRIBUTION]
-You must generate EXACTLY {num_topics} topics total. To ensure perfect counting, generate them sequentially in these exact groups:
-1. First, EXACTLY {d_count} topics for "D_doc"
-2. Second, EXACTLY {c_count} topics for "C_comm"
-3. Third, EXACTLY {t_count} topics for "T_trouble"
-4. Fourth, EXACTLY {g_count} topics for "G_custom"
-STOP immediately after the final G_custom topic. The total must be exactly {num_topics}.
+You must generate EXACTLY {num_topics} topics total. Count carefully — each group must have EXACTLY the count listed below. Do NOT add extra topics.
+
+Group 1 — D_doc: EXACTLY {d_count} topics
+Group 2 — C_comm: EXACTLY {c_count} topics
+Group 3 — T_trouble: EXACTLY {t_count} topics
+Group 4 — G_custom: EXACTLY {g_count} topics
+TOTAL: {d_count} + {c_count} + {t_count} + {g_count} = {num_topics}
+
+Stop immediately after the last G_custom topic. Do NOT generate any extra topics beyond the counts above.
 
 [REQUIREMENTS]
 1. Output format: A single JSON array containing exactly {num_topics} inner arrays.
@@ -144,19 +147,24 @@ STOP immediately after the final G_custom topic. The total must be exactly {num_
 - Seed Tier 2 Data: "{seed_tier_2}"
 
 [OUTPUT CONSTRAINT]
-- Output ONLY a raw, valid JSON array of arrays.
+- Output ONLY a raw, valid JSON array of exactly {num_topics} inner arrays.
 - NO markdown formatting (no ```json or ```).
 - NO conversational text.
-- Start directly with [[ and end directly with ]].
+- Start directly with [ and end directly with ].
+- Do NOT add any topics beyond the exact counts listed above.
 
 [EXAMPLE EXPECTED STRUCTURE]
 [
   ["Drafting initial project requirements", "D_doc", "tier_1"],
   ["Writing a complex BRD", "D_doc", "tier_2"],
+  ... ({d_count} D_doc topics total) ...
   ["Facilitating daily standups", "C_comm", "tier_1"],
-  ... (continue until exactly {num_topics} items are reached) ...
+  ... ({c_count} C_comm topics total) ...
+  ["Investigating production incidents", "T_trouble", "tier_1"],
+  ... ({t_count} T_trouble topics total) ...
   ["Negotiating contract extensions", "G_custom", "tier_2"]
 ]
+Total: exactly {num_topics} topics. Do NOT add more.
 """
 
 
@@ -235,7 +243,7 @@ Break down the topic "{topic_name}" into EXACTLY {num_lessons} lesson titles for
 [OUTPUT CONSTRAINT]
 - Output ONLY a raw, valid JSON array of arrays.
 - NO markdown, NO backticks, NO conversational text.
-- Start directly with [[ and end directly with ]].
+- Start directly with [ and end directly with ].
 
 [INPUT DATA]
 - Role: "{role}"
@@ -315,7 +323,7 @@ Output ONLY a raw, valid JSON array of EXACTLY 7 inner arrays.
 [OUTPUT CONSTRAINT]
 - Output ONLY a raw, valid JSON array containing EXACTLY 7 inner arrays.
 - NO markdown formatting (no ```json or ```), NO backticks, NO object keys, NO conversational text.
-- Start directly with [[ and end directly with ]].
+- Start directly with [ and end directly with ].
 - Every string must stay on ONE single line (NO literal line breaks inside a string; use escaped \\n if needed).
 - CRITICAL: Use single quotes (') inside strings, NEVER unescaped double quotes.
 

@@ -7,6 +7,7 @@ ENV/
 env.bak/
 venv.bak/
 
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -17,6 +18,7 @@ __pycache__/
 htmlcov/
 .coverage
 .tox/
+static/
 
 # IDEs and Editors
 .vscode/
@@ -31,3 +33,6 @@ Thumbs.db
 # Database
 *.sqlite3
 *.db
+
+# Testing
+test_*

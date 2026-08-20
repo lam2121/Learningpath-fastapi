@@ -75,6 +75,25 @@ class LessonDurationTest(unittest.TestCase):
         self.assertAlmostEqual(quiz_minutes, 15.3333333333, places=2)
         self.assertEqual(total, 17)
 
+    def test_estimate_7_section_theory_payload(self):
+        theory_7 = [
+            ["scenario", "Scenario in English | Tiếng Việt", "1. Decision 1 | 2. Decision 2 | 3. Decision 3", "Teacher note"],
+            ["vocab", "latency|/ˈleɪ.tən.si/|noun|độ trễ|delay in network response|The API latency increased by 200ms|Stress on first syllable", "Pronunciation Guide: Stress the first syllable | Drills: 1. Measure latency", "Teacher note"],
+            ["phrases", "bottleneck|điểm nghẽn|when describing system slowdowns|Database queries are the main bottleneck", "Scenario 1: Slow queries -> Best phrase: bottleneck", "Teacher note"],
+            ["reading", "Incident Report: Database CPU pegged at 100%. We identified unindexed queries.", "Q1. What caused CPU spike? || A1. Unindexed queries.", "Teacher note"],
+            ["dialogue", "Context: Incident triage || Dialogue: Lead: We have a latency spike. | Dev: Checking logs now.", "latency spike - indicates urgency || Practice Tasks: 1. (Ask): Where is the spike?", "Teacher note"],
+            ["listening", "Audio Script: Lead: 'Team, we resolved the database bottleneck and latency is back to normal.'", "Q1. What was resolved? || A1. The database bottleneck.", "Teacher note"],
+            ["wrapup", "1. Vocab takeaway | 2. Phrase takeaway | 3. Rule takeaway | 4. Pitfall takeaway", "Action Task: Write a Slack update regarding latency.", "Teacher note"],
+        ]
+        quiz = {
+            "ordering": [["q", "a|b|c|d", "a", "exp"]] * 10,
+            "fill_blank": [["q", "a|b|c|d", "a", "exp"]] * 10,
+            "multi_select": [["q", "a|b|c|d", "a", "exp"]] * 10,
+        }
+        total = estimate_lesson_duration(theory_7, quiz)
+        self.assertGreater(total, 5)
+        self.assertLessEqual(total, 60)
+
     def test_unknown_quiz_type_uses_default_seconds(self):
         total = calculate_quiz_minutes({"matching": [["q", "a", "b", "c"]] * 4})
         self.assertAlmostEqual(total, 100 / 60, places=4)

@@ -39,6 +39,18 @@ SKILL_TAG_TO_SHORT = {
     "G_custom": "G",
 }
 
+# level column stores plain strings: 'Easy' | 'Medium' | 'Hard' | 'Expert'
+
+# Difficulty-weighted scoring (spec §3)
+# Each skill: 4×Easy (weight 1) + 4×Medium (weight 2) + 4×Hard (weight 3) = 4 + 8 + 12 = 24
+DIFFICULTY_WEIGHT: dict[str, int] = {
+    "Easy": 1,
+    "Medium": 2,
+    "Hard": 3,
+    "Expert": 4,
+}
+MAX_SKILL_WEIGHT = 24  # 4×1 + 4×2 + 4×3
+
 
 def fetch_questions_by_role(
     db: Session, role_id: int
@@ -91,10 +103,11 @@ def fetch_questions_by_role(
                 skill=SKILL_TAG_TO_SHORT.get(
                     record.skill, record.skill
                 ),  # 'D' | 'C' | 'T' | 'G'
-                level=record.level,  # 1 | 2 | 3
+                level=record.level,  # 'Easy' | 'Medium' | 'Hard' | 'Expert'
                 statement=statement,
                 options=options,
                 correct_answer=correct_answer,
+                expanded_skill=record.expanded_skill,
             )
         )
 
@@ -216,7 +229,50 @@ def complete_placement_test(
     # answers. Silently skips when the role has no topics yet (B1/B2 not run);
     # a later recompute (POST /onboarding/roadmap/select) fills it.
     build_and_save_roadmap(db, user_id)
+    
+    # Initialize Radar Score from placement test
+    _initialize_radar_score(db, user_id)
+    
     return True
+
+
+def _initialize_radar_score(db: Session, user_id: int):
+    """
+    Computes and persists the initial radar score based on the placement test
+    weighted accuracy (spec §3), and saves it into UserRadarScore.
+    start_vector = weighted_accuracy × INITIAL_RADAR_SCALE per skill.
+    """
+    from app.models.user_radar_score import UserRadarScore
+
+    # Delete any existing record for this user
+    db.query(UserRadarScore).filter(UserRadarScore.user_id == user_id).delete()
+
+    rows = _load_placement_answer_rows(db, user_id)
+    if not rows:
+        return
+
+    # _parse_answer_rows returns a 4-tuple; we only need answers + earned weights
+    answers, _skill_correct, _skill_total, skill_earned_weight = _parse_answer_rows(rows)
+    if not answers:
+        return
+
+    INITIAL_RADAR_SCALE = 0.85
+
+    start_vector = {
+        skill: (skill_earned_weight[skill] / MAX_SKILL_WEIGHT) * 100 * INITIAL_RADAR_SCALE
+        for skill in SKILLS
+    }
+
+    prev_stack = {s: [] for s in SKILLS}
+
+    radar = UserRadarScore(
+        user_id=user_id,
+        start_vector=start_vector,
+        current_vector=start_vector.copy(),
+        prev_stack=prev_stack,
+    )
+    db.add(radar)
+    db.commit()
 
 
 def _load_placement_answer_rows(db: Session, user_id: int):
@@ -241,6 +297,7 @@ def _parse_answer_rows(rows) -> tuple[list[PlacementAnswerDetail], dict, dict]:
     answers: list[PlacementAnswerDetail] = []
     skill_correct: dict[str, int] = {s: 0 for s in SKILLS}
     skill_total: dict[str, int] = {s: 0 for s in SKILLS}
+    skill_earned_weight: dict[str, int] = {s: 0 for s in SKILLS}
 
     for user_test, question in rows:
         # Parse user_answer JSON
@@ -287,13 +344,14 @@ def _parse_answer_rows(rows) -> tuple[list[PlacementAnswerDetail], dict, dict]:
         answer = PlacementAnswerDetail(
             question_id=question.id,
             axis=question.skill,  # authoritative skill tag (D_doc, ...)
-            level=question.level,
+            level=user_answer.get("difficulty", question.level),
             statement=statement,
             options=options,
             correct_answer=correct_answer,
             selected_id=user_answer.get("selected_id", ""),
             selected_text=user_answer.get("selected_text"),
             is_correct=user_answer.get("is_correct", False),
+            expanded_skill=getattr(question, "expanded_skill", None),
         )
         answers.append(answer)
 
@@ -304,8 +362,10 @@ def _parse_answer_rows(rows) -> tuple[list[PlacementAnswerDetail], dict, dict]:
         skill_total[skill] += 1
         if answer.is_correct:
             skill_correct[skill] += 1
+            weight = DIFFICULTY_WEIGHT.get(answer.level, 1)
+            skill_earned_weight[skill] += weight
 
-    return answers, skill_correct, skill_total
+    return answers, skill_correct, skill_total, skill_earned_weight
 
 
 def compute_skill_scores(db: Session, user_id: int) -> dict[str, float] | None:
@@ -316,9 +376,9 @@ def compute_skill_scores(db: Session, user_id: int) -> dict[str, float] | None:
     rows = _load_placement_answer_rows(db, user_id)
     if not rows:
         return None
-    _, skill_correct, skill_total = _parse_answer_rows(rows)
+    _, _skill_correct, _skill_total, skill_earned_weight = _parse_answer_rows(rows)
     return {
-        skill: skill_correct[skill] / max(1, skill_total[skill]) for skill in SKILLS
+        skill: skill_earned_weight[skill] / MAX_SKILL_WEIGHT for skill in SKILLS
     }
 
 
@@ -358,18 +418,19 @@ def get_placement_test_result(db: Session, user_id: int) -> PlacementResultRespo
         )
 
     # Parse answers + accumulate per-skill counts (shared with compute_skill_scores)
-    answers, skill_correct, skill_total = _parse_answer_rows(rows)
+    answers, skill_correct, skill_total, skill_earned_weight = _parse_answer_rows(rows)
 
-    # Compute per-skill scores (fraction correct)
+    # Difficulty-weighted accuracy per skill (spec §3)
+    # Score = earned_weight / MAX_SKILL_WEIGHT (24) × 100
     skill_scores_fraction: dict[str, float] = {
-        skill: skill_correct[skill] / max(1, skill_total[skill]) for skill in SKILLS
+        skill: skill_earned_weight[skill] / MAX_SKILL_WEIGHT for skill in SKILLS
     }
 
-    # Overall score
+    # Raw counts (used for display: "X / Y correct")
     total_questions = sum(skill_total.values())
     total_correct = sum(skill_correct.values())
-    overall_fraction = total_correct / max(1, total_questions)
-    overall_percent = round(overall_fraction * 100)
+    # Overall percent = average weighted accuracy across all 4 skills
+    overall_percent = round(sum(skill_scores_fraction.values()) / max(1, len(SKILLS)) * 100)
 
     # Classify starting level and weak skills
     starting_level, weak_skills = classify_user(skill_scores_fraction)
@@ -390,6 +451,17 @@ def get_placement_test_result(db: Session, user_id: int) -> PlacementResultRespo
         skill: round(score * 100) for skill, score in skill_scores_fraction.items()
     }
 
+    # Load UserRadarScore if it exists
+    from app.models.user_radar_score import UserRadarScore
+    radar_score_record = db.query(UserRadarScore).filter(UserRadarScore.user_id == user_id).first()
+    radar_score = None
+    if radar_score_record:
+        radar_score = {
+            "start_vector": radar_score_record.start_vector,
+            "current_vector": radar_score_record.current_vector,
+            "prev_stack": radar_score_record.prev_stack,
+        }
+
     return PlacementResultResponse(
         learning_status=user.learning_status,
         total_questions=total_questions,
@@ -402,6 +474,7 @@ def get_placement_test_result(db: Session, user_id: int) -> PlacementResultRespo
         role_name=role_name,
         baseline=baseline,
         answers=answers,
+        radar_score=radar_score,
     )
 
 

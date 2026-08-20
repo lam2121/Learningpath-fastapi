@@ -4,10 +4,11 @@ from pydantic import BaseModel
 class PlacementTestQuestionResponse(BaseModel):
     id: int
     skill: str  # 'D' | 'C' | 'T' | 'G'
-    level: int  # 1–10  (5 questions per level per skill = 50/skill = 200/role)
+    level: str  # Easy | Medium | Hard | Expert
     statement: str
     options: list[str]  # 4 plain-text options
     correct_answer: str  # exact text of the correct option
+    expanded_skill: str | None = None  # 'Context_layer' | 'Language_layer'
 
     class Config:
         from_attributes = True
@@ -24,7 +25,7 @@ class PlacementTestResultItem(BaseModel):
     selected_text: str | None = None
     is_correct: bool
     axis: str
-    difficulty: int
+    difficulty: str  # Easy | Medium | Hard | Expert
 
 
 class CompletePlacementTestRequest(BaseModel):
@@ -41,13 +42,20 @@ class CompletePlacementTestResponse(BaseModel):
 class PlacementAnswerDetail(BaseModel):
     question_id: int
     axis: str  # v2.1 tag: D_doc | C_comm | T_trouble | G_custom
-    level: int  # 1–8
+    level: str  # Easy | Medium | Hard | Expert
     statement: str
     options: list[str]  # 4 plain-text options
     correct_answer: str  # exact text of the correct option
     selected_id: str  # letter: 'a' | 'b' | 'c' | 'd'
     selected_text: str | None = None  # exact text of the option the user picked
     is_correct: bool
+    expanded_skill: str | None = None  # 'Context_layer' | 'Language_layer'
+
+
+class RadarScoreSchema(BaseModel):
+    start_vector: dict[str, float]
+    current_vector: dict[str, float]
+    prev_stack: dict[str, list[float]]
 
 
 class PlacementResultResponse(BaseModel):
@@ -64,3 +72,4 @@ class PlacementResultResponse(BaseModel):
         None  # {D_doc: 20, C_comm: 20, T_trouble: 50, G_custom: 10}
     )
     answers: list[PlacementAnswerDetail]
+    radar_score: RadarScoreSchema | None = None

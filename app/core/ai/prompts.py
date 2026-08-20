@@ -31,6 +31,7 @@ def get_skill_description(
     item = skill_definitions.get(skill) or {}
     return str(item.get("description", "")).strip()
 
+
 PROMPT_A_TEMPLATE = """[SYSTEM INSTRUCTION]
 You are an expert IT English Assessment Architect.
 Generate EXACTLY {num_questions} multiple-choice questions for the "{role}" role,
@@ -314,7 +315,7 @@ Write the complete teaching content (Theory) for ONE lesson. Output a raw, valid
 - NO markdown, NO backticks, NO object keys, NO conversational text.
 - Start directly with [[ and end directly with ]].
 - Every string must stay on ONE line (no line breaks inside a string).
-- CRITICAL: use single quotes (') inside strings, never unescaped double quotes.
+- CRITICAL: All JSON strings MUST use double quotes (") for the JSON structure. Inside string content, use single quotes (') for contractions or inner quotes — never unescaped double quotes inside a string value.
 
 [INPUT DATA]
 - Role: "{role}"

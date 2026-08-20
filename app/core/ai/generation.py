@@ -9,6 +9,7 @@ then Prompt B-2 (1 call per topic -> 6 lesson shells each). Same retry/logging/
 rejection/exception-proofing conventions as Generator A.
 """
 
+import ast
 import asyncio
 import json
 import logging
@@ -81,6 +82,44 @@ def _find_first_list(node, depth: int = 0):
     return None
 
 
+def _strip_code_fences(text: str) -> str:
+    """Remove leading/trailing markdown code fences (``` or ```json)."""
+    lines = text.splitlines()
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _extract_json_start(text: str) -> str:
+    """Locate the first `[` or `{` and return everything from there.
+
+    Some models prepend preamble text (e.g. "Here is the JSON:") before the
+    actual payload despite explicit instructions.  This strips that prefix so
+    ``json.loads`` does not choke on it.
+    """
+    for i, ch in enumerate(text):
+        if ch in ("[", "{"):
+            trimmed = text[i:]
+            # Also strip trailing non-JSON text: find the last ] or } and
+            # drop anything after it (e.g. "```\\nEnd text").
+            for j in range(len(trimmed) - 1, -1, -1):
+                if trimmed[j] in ("]", "}"):
+                    return trimmed[: j + 1]
+            return trimmed
+    return text
+
+
+def _try_literal_eval(text: str):
+    """Fallback parser using ast.literal_eval for single-quoted Python literals.
+
+    Some models output single-quoted strings (valid Python, invalid JSON).
+    This safely parses that format as a last resort before giving up.
+    """
+    return ast.literal_eval(text)
+
+
 def _parse_json(text: str):
     """Parse the raw model output as JSON, tolerating code fences.
 
@@ -90,15 +129,12 @@ def _parse_json(text: str):
     `{"lesson": {"sections": [...]}}`) so the validator sees the array.
     """
     cleaned = text.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.splitlines()
-        if lines and lines[0].strip().startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip().startswith("```"):
-            lines = lines[:-1]
-        cleaned = "\n".join(lines).strip()
-
-    parsed = json.loads(cleaned)
+    cleaned = _strip_code_fences(cleaned)
+    cleaned = _extract_json_start(cleaned)
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        parsed = _try_literal_eval(cleaned)
     if isinstance(parsed, list):
         return parsed
     if isinstance(parsed, dict):
@@ -268,7 +304,13 @@ async def _generate_skill_block(
             }
         )
 
-    return None, usage_logs, (last_error or f"Skill block '{skill}' failed"), last_raw, last_checks
+    return (
+        None,
+        usage_logs,
+        (last_error or f"Skill block '{skill}' failed"),
+        last_raw,
+        last_checks,
+    )
 
 
 async def generate_placement_for_role(role_id: int) -> dict:
@@ -356,11 +398,21 @@ async def generate_placement_for_role(role_id: int) -> dict:
 
             for skill in SKILLS:
                 try:
-                    rows, usage_logs, error, raw_resp, val_checks = await _generate_skill_block(
-                        client, role, skill
-                    )
+                    (
+                        rows,
+                        usage_logs,
+                        error,
+                        raw_resp,
+                        val_checks,
+                    ) = await _generate_skill_block(client, role, skill)
                 except (GenerationError, KillSwitchError) as exc:
-                    rows, usage_logs, error, raw_resp, val_checks = None, [], str(exc), None, None
+                    rows, usage_logs, error, raw_resp, val_checks = (
+                        None,
+                        [],
+                        str(exc),
+                        None,
+                        None,
+                    )
 
                 for log in usage_logs:
                     _log_usage(
@@ -510,7 +562,13 @@ async def _generate_topic_outline(client: GeminiClientPool, role: JobRole) -> tu
             }
         )
 
-    return None, usage_logs, (last_error or "Topic outline generation failed"), last_raw, last_checks
+    return (
+        None,
+        usage_logs,
+        (last_error or "Topic outline generation failed"),
+        last_raw,
+        last_checks,
+    )
 
 
 async def _generate_lesson_shells(
@@ -579,7 +637,13 @@ async def _generate_lesson_shells(
             }
         )
 
-    return None, usage_logs, (last_error or "Lesson shells generation failed"), last_raw, last_checks
+    return (
+        None,
+        usage_logs,
+        (last_error or "Lesson shells generation failed"),
+        last_raw,
+        last_checks,
+    )
 
 
 def _insert_topics(db: Session, role_id: int, rows: list) -> int:
@@ -713,9 +777,13 @@ async def generate_course_for_role(role_id: int) -> dict:
             # ── B-1: 20 topics ──────────────────────────────────────────────
             gen.step = "b1"
             db.commit()
-            topic_rows, usage_logs, b1_error, b1_raw, b1_checks = await _generate_topic_outline(
-                client, role
-            )
+            (
+                topic_rows,
+                usage_logs,
+                b1_error,
+                b1_raw,
+                b1_checks,
+            ) = await _generate_topic_outline(client, role)
             for log in usage_logs:
                 _log_usage(
                     db,
@@ -762,9 +830,13 @@ async def generate_course_for_role(role_id: int) -> dict:
                 for topic in topics:
                     gen.step = "b2"
                     db.commit()
-                    shell_rows, usage_logs, b2_error, b2_raw, b2_checks = await _generate_lesson_shells(
-                        client, role, topic
-                    )
+                    (
+                        shell_rows,
+                        usage_logs,
+                        b2_error,
+                        b2_raw,
+                        b2_checks,
+                    ) = await _generate_lesson_shells(client, role, topic)
                     for log in usage_logs:
                         _log_usage(
                             db,
@@ -856,15 +928,12 @@ def _parse_json_object(text: str) -> dict:
     ordering:[...]}` dict would be destroyed by `_parse_json`'s unwrap logic.
     """
     cleaned = text.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.splitlines()
-        if lines and lines[0].strip().startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip().startswith("```"):
-            lines = lines[:-1]
-        cleaned = "\n".join(lines).strip()
-
-    parsed = json.loads(cleaned)
+    cleaned = _strip_code_fences(cleaned)
+    cleaned = _extract_json_start(cleaned)
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        parsed = _try_literal_eval(cleaned)
     if isinstance(parsed, dict):
         return parsed
     raise ValueError(f"Expected a JSON object, got {type(parsed).__name__}")
@@ -960,7 +1029,13 @@ async def _generate_lesson_theory(
             }
         )
 
-    return None, usage_logs, (last_error or "Theory content generation failed"), last_raw, last_checks
+    return (
+        None,
+        usage_logs,
+        (last_error or "Theory content generation failed"),
+        last_raw,
+        last_checks,
+    )
 
 
 async def _generate_lesson_quiz(
@@ -1041,7 +1116,13 @@ async def _generate_lesson_quiz(
             }
         )
 
-    return None, usage_logs, (last_error or "Lesson quiz generation failed"), last_raw, last_checks
+    return (
+        None,
+        usage_logs,
+        (last_error or "Lesson quiz generation failed"),
+        last_raw,
+        last_checks,
+    )
 
 
 async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dict:
@@ -1091,9 +1172,13 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
             client = GeminiClientPool()
 
             # ── C-1: theory ──────────────────────────────────────────────────
-            theory, theory_usage, theory_error, c1_raw, c1_checks = await _generate_lesson_theory(
-                client, role, topic, lesson
-            )
+            (
+                theory,
+                theory_usage,
+                theory_error,
+                c1_raw,
+                c1_checks,
+            ) = await _generate_lesson_theory(client, role, topic, lesson)
             for log in theory_usage:
                 _log_usage(
                     db,
@@ -1120,9 +1205,13 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
                 return {"status": "failed", "error": theory_error or "C-1 failed"}
 
             # ── C-2: quiz (grounded in the generated theory) ─────────────────
-            quiz, quiz_usage, quiz_error, c2_raw, c2_checks = await _generate_lesson_quiz(
-                client, role, topic, lesson, theory
-            )
+            (
+                quiz,
+                quiz_usage,
+                quiz_error,
+                c2_raw,
+                c2_checks,
+            ) = await _generate_lesson_quiz(client, role, topic, lesson, theory)
             for log in quiz_usage:
                 _log_usage(
                     db,

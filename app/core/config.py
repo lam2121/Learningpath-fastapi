@@ -37,9 +37,6 @@ class AppConfig(BaseSettings):
     # roots (certifi) cannot verify it (e.g. a corporate/self-signed MITM proxy).
     SSL_CERT_FILE: str = ""  # single PEM bundle
     SSL_CERT_DIR: str = ""  # directory of CA certs (auto-concatenated at startup)
-    SSL_VERIFY: bool = (
-        True  # False = skip TLS verification for provider calls (insecure)
-    )
 
     # Generator C-1 quality gates — count-based only (word-count gates removed;
     # the C-1 prompt still requests generous word counts). Counts are relaxed

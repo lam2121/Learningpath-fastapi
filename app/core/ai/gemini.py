@@ -248,7 +248,7 @@ class GeminiClientPool:
         self._cooldowns: dict[str, float] = {}
         self._lock = asyncio.Lock()
         self._last_call_at = 0.0
-        verify_target = _default_ssl_context() if app_config.SSL_VERIFY else False
+        verify_target = _default_ssl_context()
         self._http = httpx.AsyncClient(
             timeout=REQUEST_TIMEOUT_SECONDS, verify=verify_target
         )

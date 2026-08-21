@@ -17,6 +17,7 @@ from app.feature.onboarding.placement_test_service import (
     get_first_assigned_lesson_ids,
     get_placement_test_result,
     get_user_roadmap,
+    lesson_is_unlocked_for_user,
     recompute_roadmap,
 )
 from app.feature.onboarding.lesson_quiz_service import (
@@ -239,6 +240,37 @@ def _get_owned_assigned_lesson(db: Session, user_id: int, lesson_id: int) -> Les
     return lesson
 
 
+def _get_owned_assigned_track(db: Session, user_id: int, lesson: Lesson) -> str:
+    owned = (
+        db.query(UserRoadmap)
+        .filter(
+            UserRoadmap.user_id == user_id,
+            UserRoadmap.topic_id == lesson.topic_id,
+        )
+        .first()
+    )
+    if owned is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Lesson does not belong to your roadmap",
+        )
+    return str(owned.track)
+
+
+def _require_unlocked_lesson(
+    db: Session,
+    user_id: int,
+    lesson: Lesson,
+) -> None:
+    track = _get_owned_assigned_track(db, user_id, lesson)
+    if lesson_is_unlocked_for_user(db, user_id, lesson, track):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Pass the previous lesson in this topic to unlock this lesson.",
+    )
+
+
 @router.get(
     "/roadmap",
     response_model=RoadmapResponse,
@@ -336,6 +368,7 @@ def get_lesson_quiz_state_endpoint(
 ):
     user_id = _resolve_user_id(db, current_user)
     lesson = _get_owned_assigned_lesson(db, user_id, lesson_id)
+    _require_unlocked_lesson(db, user_id, lesson)
     return get_lesson_quiz_state(db, user_id, lesson)
 
 
@@ -352,6 +385,7 @@ def submit_lesson_quiz_endpoint(
 ):
     user_id = _resolve_user_id(db, current_user)
     lesson = _get_owned_assigned_lesson(db, user_id, lesson_id)
+    _require_unlocked_lesson(db, user_id, lesson)
     return submit_lesson_quiz(
         db,
         user_id,
@@ -373,4 +407,5 @@ def get_lesson_quiz_result_detail_endpoint(
 ):
     user_id = _resolve_user_id(db, current_user)
     lesson = _get_owned_assigned_lesson(db, user_id, lesson_id)
+    _require_unlocked_lesson(db, user_id, lesson)
     return get_lesson_quiz_result_detail(db, user_id, lesson)

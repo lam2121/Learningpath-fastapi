@@ -28,6 +28,7 @@ from app.models.lesson import Lesson
 from app.models.placement_test_question import PlacementTestQuestion
 from app.models.topic import Topic
 from app.models.user import LEARNING_ENROLLED, LEARNING_NONE
+from app.models.user_lesson import UserLesson
 from app.models.user_placement_test import UserPlacementTest
 from app.models.user_roadmap import UserRoadmap
 
@@ -577,6 +578,75 @@ def build_and_save_roadmap(db: Session, user_id: int) -> None:
     _build_and_save_roadmap(db, user_id)
 
 
+def _compute_topic_unlock_map(
+    topic_lessons: list[Lesson],
+    completed_lesson_ids: set[int],
+) -> dict[int, bool]:
+    unlock_map: dict[int, bool] = {}
+    previous_lesson_id: int | None = None
+
+    for lesson in topic_lessons:
+        unlock_map[lesson.id] = (
+            previous_lesson_id is None
+            or previous_lesson_id in completed_lesson_ids
+        )
+        previous_lesson_id = lesson.id
+
+    return unlock_map
+
+
+def get_assigned_topic_lessons(
+    db: Session,
+    topic_id: int,
+    track: str,
+) -> list[Lesson]:
+    lessons = (
+        db.query(Lesson)
+        .filter(Lesson.topic_id == topic_id)
+        .order_by(Lesson.id.asc())
+        .all()
+    )
+    return [
+        lesson
+        for lesson in lessons
+        if lesson_is_assigned(track, lesson.difficulty_tier)
+    ]
+
+
+def get_completed_lesson_ids_for_topic(
+    db: Session,
+    user_id: int,
+    topic_id: int,
+) -> set[int]:
+    rows = (
+        db.query(UserLesson.lesson_id)
+        .join(Lesson, Lesson.id == UserLesson.lesson_id)
+        .filter(
+            UserLesson.user_id == user_id,
+            UserLesson.completed_at.isnot(None),
+            Lesson.topic_id == topic_id,
+        )
+        .all()
+    )
+    return {int(lesson_id) for (lesson_id,) in rows}
+
+
+def lesson_is_unlocked_for_user(
+    db: Session,
+    user_id: int,
+    lesson: Lesson,
+    track: str,
+) -> bool:
+    topic_lessons = get_assigned_topic_lessons(db, lesson.topic_id, track)
+    completed_lesson_ids = get_completed_lesson_ids_for_topic(
+        db,
+        user_id,
+        lesson.topic_id,
+    )
+    unlock_map = _compute_topic_unlock_map(topic_lessons, completed_lesson_ids)
+    return unlock_map.get(lesson.id, False)
+
+
 def get_first_assigned_lesson_ids(db: Session, user_id: int) -> list[int]:
     """Return the first assigned lesson id for each topic in the user's roadmap."""
     rows = (
@@ -657,10 +727,31 @@ def get_user_roadmap(db: Session, user_id: int) -> RoadmapResponse:
         if lesson_is_assigned(track, lesson.difficulty_tier):
             lessons_by_topic.setdefault(lesson.topic_id, []).append(lesson)
 
+    completed_lesson_ids_by_topic: dict[int, set[int]] = {}
+    if topic_ids:
+        completed_rows = (
+            db.query(UserLesson.lesson_id, Lesson.topic_id)
+            .join(Lesson, Lesson.id == UserLesson.lesson_id)
+            .filter(
+                UserLesson.user_id == user_id,
+                UserLesson.completed_at.isnot(None),
+                Lesson.topic_id.in_(topic_ids),
+            )
+            .all()
+        )
+        for lesson_id, topic_id in completed_rows:
+            completed_lesson_ids_by_topic.setdefault(int(topic_id), set()).add(
+                int(lesson_id)
+            )
+
     roadmap_topics: list[RoadmapTopicResponse] = []
     total_estimated_minutes = 0
     for topic in topics:
         topic_lessons = lessons_by_topic.get(topic.id, [])
+        unlock_map = _compute_topic_unlock_map(
+            topic_lessons,
+            completed_lesson_ids_by_topic.get(topic.id, set()),
+        )
         topic_minutes = sum((lesson.estimated_minutes or 0) for lesson in topic_lessons)
         total_estimated_minutes += topic_minutes
         roadmap_topics.append(
@@ -679,8 +770,17 @@ def get_user_roadmap(db: Session, user_id: int) -> RoadmapResponse:
                         difficulty_tier=lesson.difficulty_tier,
                         estimated_minutes=lesson.estimated_minutes,
                         is_generated=bool(lesson.is_generated),
-                        theory_content=lesson.theory_content,
-                        quiz_content=lesson.quiz_content,
+                        is_unlocked=unlock_map.get(lesson.id, False),
+                        theory_content=(
+                            lesson.theory_content
+                            if unlock_map.get(lesson.id, False)
+                            else None
+                        ),
+                        quiz_content=(
+                            lesson.quiz_content
+                            if unlock_map.get(lesson.id, False)
+                            else None
+                        ),
                     )
                     for lesson in topic_lessons
                 ],

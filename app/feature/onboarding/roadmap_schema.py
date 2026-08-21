@@ -15,6 +15,7 @@ class RoadmapLessonResponse(BaseModel):
     difficulty_tier: str
     estimated_minutes: int | None = None
     is_generated: bool
+    is_unlocked: bool
     theory_content: Any | None = None
     quiz_content: Any | None = None
 

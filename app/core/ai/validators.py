@@ -7,13 +7,9 @@ and Prompt B-2 gate (lesson shells).
 from typing import Any
 
 NUM_PLACEMENT_QUESTIONS_PER_SKILL = 12
-BANDS = [
-    (1, 2),
-    (3, 4),
-    (5, 6),
-    (7, 8),
-]
+VALID_LEVELS = ["Easy", "Medium", "Hard", "Expert"]
 VALID_SKILLS = {"D_doc", "C_comm", "T_trouble", "G_custom"}
+VALID_EXPANDED_SKILLS = {"Context_layer", "Language_layer"}
 VALID_ANSWERS = {"A", "B", "C", "D"}
 
 # Generator B-1 / B-2 constants
@@ -38,12 +34,12 @@ TIER_SPLIT_MAX = 12
 SOFT_BAND_THRESHOLD = 8
 
 
-def band_of(level: int) -> int:
-    """Return 1-based band index for a level, or -1 if out of 1-8 range."""
-    for i, (lo, hi) in enumerate(BANDS, start=1):
-        if lo <= level <= hi:
-            return i
-    return -1
+def band_of(level: str) -> int:
+    """Return 1-based band index for a level string, or -1 if invalid."""
+    try:
+        return VALID_LEVELS.index(level) + 1
+    except ValueError:
+        return -1
 
 
 def band_distribution(rows: list[list[Any]]) -> list[int]:
@@ -59,12 +55,12 @@ def band_distribution(rows: list[list[Any]]) -> list[int]:
 
 def soft_band_score(rows: list[list[Any]]) -> int:
     """
-    Soft check: for each band contracted to hold 3 questions, count the
-    questions that are correctly placed (min(count, 3)). Sum over bands.
+    Soft check: for each band contracted to hold 4 questions, count the
+    questions that are correctly placed (min(count, 4)). Sum over bands.
     >= SOFT_BAND_THRESHOLD (8) passes; otherwise a targeted re-roll is triggered.
     """
     counts = band_distribution(rows)
-    return sum(min(c, 3) for c in counts)
+    return sum(min(c, 4) for c in counts)
 
 
 def validate_placement_block(rows: Any, target_skill: str) -> dict:
@@ -91,23 +87,21 @@ def validate_placement_block(rows: Any, target_skill: str) -> dict:
         )
 
     for i, row in enumerate(rows):
-        if not isinstance(row, list) or len(row) != 5:
-            errors.append(f"Row {i} must have exactly 5 elements")
+        if not isinstance(row, list) or len(row) != 6:
+            errors.append(f"Row {i} must have exactly 6 elements")
             continue
 
-        skill, level, text, options, answer = row
+        skill, level, text, options, answer, expanded_skill = row
 
         if skill != target_skill:
             errors.append(
                 f"Row {i}: skill '{skill}' does not match target '{target_skill}'"
             )
 
-        if (
-            not isinstance(level, int)
-            or isinstance(level, bool)
-            or not (1 <= level <= 8)
-        ):
-            errors.append(f"Row {i}: level '{level}' must be an integer 1-8")
+        if not isinstance(level, str) or level not in VALID_LEVELS:
+            errors.append(
+                f"Row {i}: level '{level}' must be one of {VALID_LEVELS}"
+            )
 
         if not isinstance(text, str) or not text.strip():
             errors.append(f"Row {i}: question text is empty")
@@ -119,6 +113,11 @@ def validate_placement_block(rows: Any, target_skill: str) -> dict:
 
         if answer not in VALID_ANSWERS:
             errors.append(f"Row {i}: correct answer '{answer}' must be one of A/B/C/D")
+
+        if not isinstance(expanded_skill, str) or expanded_skill not in VALID_EXPANDED_SKILLS:
+            errors.append(
+                f"Row {i}: expanded_skill '{expanded_skill}' must be one of {VALID_EXPANDED_SKILLS}"
+            )
 
     if not errors:
         score = soft_band_score(rows)
@@ -275,8 +274,7 @@ C1_SECTION_ORDER = [
     "phrases",
     "reading",
     "dialogue",
-    "process",
-    "dos_donts",
+    "listening",
     "wrapup",
 ]
 NUM_VOCAB = 8
@@ -286,9 +284,9 @@ MIN_DIALOGUE_KEY_PHRASES = 1
 
 def validate_theory_content(rows: Any) -> dict:
     """
-    Validate the Prompt C-1 output (8-section theory content).
+    Validate the Prompt C-1 output (7-section theory content).
 
-    Gate is deliberately minimal (deviation #21): ONLY the 8 section rows in
+    Gate is deliberately minimal (deviation #21): ONLY the section rows in
     the fixed order are checked. No per-row element counts, no word counts,
     and no pinned-count checks — the widest pass window for fallback models
     (llama-3.3-70b / mistral) until a funded Pro key is set.
@@ -302,17 +300,30 @@ def validate_theory_content(rows: Any) -> dict:
         errors.append(f"Response is not a JSON array (got {type(rows).__name__})")
         return {"ok": False, "errors": errors, "warnings": warnings}
 
-    if len(rows) != len(C1_SECTION_ORDER):
+    if len(rows) == len(C1_SECTION_ORDER):
+        for i, expected in enumerate(C1_SECTION_ORDER):
+            row = rows[i]
+            section = row[0] if isinstance(row, list) and len(row) > 0 else None
+            if section != expected:
+                errors.append(f"Row {i}: section type '{section}' must be '{expected}'")
+    elif len(rows) == 8:
+        # Legacy 8-section order backward compatibility
+        legacy_order = ["scenario", "vocab", "phrases", "reading", "dialogue", "process", "dos_donts", "wrapup"]
+        for i, expected in enumerate(legacy_order):
+            row = rows[i]
+            section = row[0] if isinstance(row, list) and len(row) > 0 else None
+            allowed = {expected}
+            if expected == "process":
+                allowed.add("listening")
+            elif expected == "dos_donts":
+                allowed.add("speaking")
+            if section not in allowed:
+                errors.append(f"Row {i}: section type '{section}' must be '{expected}'")
+    else:
         errors.append(
             f"Expected {len(C1_SECTION_ORDER)} theory sections, got {len(rows)}"
         )
         return {"ok": False, "errors": errors, "warnings": warnings}
-
-    for i, expected in enumerate(C1_SECTION_ORDER):
-        row = rows[i]
-        section = row[0] if isinstance(row, list) and len(row) > 0 else None
-        if section != expected:
-            errors.append(f"Row {i}: section type '{section}' must be '{expected}'")
 
     return {"ok": not errors, "errors": errors, "warnings": warnings}
 

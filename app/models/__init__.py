@@ -12,7 +12,7 @@ from app.models.quiz import Quiz
 from app.models.quiz_detail import QuizDetail
 from app.models.queue import Queue
 from app.models.user_course import UserCourse
-from app.models.user_course_skill_vector import UserCourseSkillVector
+from app.models.user_radar_score import UserRadarScore
 from app.models.user_lesson import UserLesson
 from app.models.generation import RoleGeneration
 from app.models.ai_usage_log import AiUsageLog

@@ -134,6 +134,17 @@ class GenerationError(Exception):
     """Raised when an LLM provider call fails."""
 
 
+def _strip_md_fences(text: str) -> str:
+    """Strip Markdown code fences (```json ... ```) from LLM responses."""
+    import re
+    text = text.strip()
+    # Remove opening fence: ```json or ```
+    text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+    # Remove closing fence: ```
+    text = re.sub(r"\n?```\s*$", "", text)
+    return text.strip()
+
+
 @dataclass
 class LLMResponse:
     """Normalized response across all providers."""
@@ -180,24 +191,19 @@ def _load_providers() -> list[ProviderConfig]:
     were verified during testing are included. Google's OpenAI-compatible
     endpoint is used for Gemini so a single client code path works everywhere.
     """
+    # Preference order: fast free-tier providers first, Gemini last (truncated JSON fallback).
     candidates = [
-        (
-            "google",
-            "https://generativelanguage.googleapis.com/v1beta/openai",
-            app_config.GEMINI_API_KEY,
-            app_config.GEMINI_FLASH_MODEL,
-        ),
         (
             "groq",
             "https://api.groq.com/openai/v1",
             app_config.Groq,
-            "llama-3.3-70b-versatile",
+            "openai/gpt-oss-120b",
         ),
         (
             "openrouter",
             "https://openrouter.ai/api/v1",
             app_config.OpenRouter,
-            "meta-llama/llama-3.3-70b-instruct",
+            "z-ai/glm-5.2:free",
         ),
         (
             "mistral",
@@ -216,6 +222,12 @@ def _load_providers() -> list[ProviderConfig]:
             "https://router.huggingface.co/v1",
             app_config.HuggingFace,
             "meta-llama/Llama-3.1-8B-Instruct",
+        ),
+        (
+            "google",
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            app_config.GEMINI_API_KEY,
+            app_config.GEMINI_FLASH_MODEL,
         ),
     ]
     providers = []
@@ -236,7 +248,7 @@ class GeminiClientPool:
         self._cooldowns: dict[str, float] = {}
         self._lock = asyncio.Lock()
         self._last_call_at = 0.0
-        verify_target = _default_ssl_context() if app_config.SSL_VERIFY else False
+        verify_target = _default_ssl_context()
         self._http = httpx.AsyncClient(
             timeout=REQUEST_TIMEOUT_SECONDS, verify=verify_target
         )
@@ -287,7 +299,6 @@ class GeminiClientPool:
             "temperature": temperature,
             "top_p": top_p,
             "max_tokens": max_output_tokens,
-            "response_format": {"type": "json_object"},
         }
         headers = {
             "Authorization": f"Bearer {provider.api_key}",
@@ -313,13 +324,24 @@ class GeminiClientPool:
                 raise GenerationError(f"{provider.name}: unexpected response shape")
             if not content or not content.strip():
                 raise GenerationError(f"{provider.name}: empty response")
-            # We do NOT parse the JSON here using json.loads(content).
-            # The caller (e.g., generation.py) has robust parsing logic that strips Markdown 
-            # and sends validation feedback to the LLM on JSONDecodeError. 
-            # If we raise here, it breaks the retry loop.
+
+            # Detect truncated / malformed JSON early (deviation #8 of docs/07).
+            # Gemini can return HTTP 200 with a partial JSON body.  Validating
+            # here triggers rotation to the next provider immediately instead of
+            # letting the broken payload propagate to generation.py's retry loop.
+            stripped = _strip_md_fences(content)
+            try:
+                json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                preview = stripped[:300]
+                raise GenerationError(
+                    f"{provider.name} returned invalid JSON ({exc}). "
+                    f"Raw preview: {preview}"
+                )
+
             usage = body.get("usage") or {}
             return LLMResponse(
-                text=content,
+                text=stripped,
                 prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
                 completion_tokens=int(usage.get("completion_tokens", 0) or 0),
                 provider=provider.name,

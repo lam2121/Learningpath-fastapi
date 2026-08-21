@@ -28,6 +28,7 @@ from app.models.lesson import Lesson
 from app.models.placement_test_question import PlacementTestQuestion
 from app.models.topic import Topic
 from app.models.user import LEARNING_ENROLLED, LEARNING_NONE
+from app.models.user_lesson import UserLesson
 from app.models.user_placement_test import UserPlacementTest
 from app.models.user_roadmap import UserRoadmap
 
@@ -38,6 +39,19 @@ SKILL_TAG_TO_SHORT = {
     "T_trouble": "T",
     "G_custom": "G",
 }
+
+# level column stores plain strings: 'Easy' | 'Medium' | 'Hard' | 'Expert'
+
+# Difficulty-weighted scoring (spec §3)
+# Each skill: 3×Easy (weight 1) + 3×Medium (weight 2) + 3×Hard (weight 3) + 3×Expert (weight 4)
+# = 3 + 6 + 9 + 12 = 30
+DIFFICULTY_WEIGHT: dict[str, int] = {
+    "Easy": 1,
+    "Medium": 2,
+    "Hard": 3,
+    "Expert": 4,
+}
+MAX_SKILL_WEIGHT = 30
 
 
 def fetch_questions_by_role(
@@ -91,10 +105,11 @@ def fetch_questions_by_role(
                 skill=SKILL_TAG_TO_SHORT.get(
                     record.skill, record.skill
                 ),  # 'D' | 'C' | 'T' | 'G'
-                level=record.level,  # 1 | 2 | 3
+                level=record.level,  # 'Easy' | 'Medium' | 'Hard' | 'Expert'
                 statement=statement,
                 options=options,
                 correct_answer=correct_answer,
+                expanded_skill=record.expanded_skill,
             )
         )
 
@@ -216,7 +231,50 @@ def complete_placement_test(
     # answers. Silently skips when the role has no topics yet (B1/B2 not run);
     # a later recompute (POST /onboarding/roadmap/select) fills it.
     build_and_save_roadmap(db, user_id)
+    
+    # Initialize Radar Score from placement test
+    _initialize_radar_score(db, user_id)
+    
     return True
+
+
+def _initialize_radar_score(db: Session, user_id: int):
+    """
+    Computes and persists the initial radar score based on the placement test
+    weighted accuracy (spec §3), and saves it into UserRadarScore.
+    start_vector = weighted_accuracy × INITIAL_RADAR_SCALE per skill.
+    """
+    from app.models.user_radar_score import UserRadarScore
+
+    # Delete any existing record for this user
+    db.query(UserRadarScore).filter(UserRadarScore.user_id == user_id).delete()
+
+    rows = _load_placement_answer_rows(db, user_id)
+    if not rows:
+        return
+
+    # _parse_answer_rows returns a 4-tuple; we only need answers + earned weights
+    answers, _skill_correct, _skill_total, skill_earned_weight = _parse_answer_rows(rows)
+    if not answers:
+        return
+
+    INITIAL_RADAR_SCALE = 0.85
+
+    start_vector = {
+        skill: (skill_earned_weight[skill] / MAX_SKILL_WEIGHT) * 100 * INITIAL_RADAR_SCALE
+        for skill in SKILLS
+    }
+
+    prev_stack = {s: [] for s in SKILLS}
+
+    radar = UserRadarScore(
+        user_id=user_id,
+        start_vector=start_vector,
+        current_vector=start_vector.copy(),
+        prev_stack=prev_stack,
+    )
+    db.add(radar)
+    db.commit()
 
 
 def _load_placement_answer_rows(db: Session, user_id: int):
@@ -241,6 +299,7 @@ def _parse_answer_rows(rows) -> tuple[list[PlacementAnswerDetail], dict, dict]:
     answers: list[PlacementAnswerDetail] = []
     skill_correct: dict[str, int] = {s: 0 for s in SKILLS}
     skill_total: dict[str, int] = {s: 0 for s in SKILLS}
+    skill_earned_weight: dict[str, int] = {s: 0 for s in SKILLS}
 
     for user_test, question in rows:
         # Parse user_answer JSON
@@ -287,13 +346,14 @@ def _parse_answer_rows(rows) -> tuple[list[PlacementAnswerDetail], dict, dict]:
         answer = PlacementAnswerDetail(
             question_id=question.id,
             axis=question.skill,  # authoritative skill tag (D_doc, ...)
-            level=question.level,
+            level=user_answer.get("difficulty", question.level),
             statement=statement,
             options=options,
             correct_answer=correct_answer,
             selected_id=user_answer.get("selected_id", ""),
             selected_text=user_answer.get("selected_text"),
             is_correct=user_answer.get("is_correct", False),
+            expanded_skill=getattr(question, "expanded_skill", None),
         )
         answers.append(answer)
 
@@ -304,8 +364,10 @@ def _parse_answer_rows(rows) -> tuple[list[PlacementAnswerDetail], dict, dict]:
         skill_total[skill] += 1
         if answer.is_correct:
             skill_correct[skill] += 1
+            weight = DIFFICULTY_WEIGHT.get(answer.level, 1)
+            skill_earned_weight[skill] += weight
 
-    return answers, skill_correct, skill_total
+    return answers, skill_correct, skill_total, skill_earned_weight
 
 
 def compute_skill_scores(db: Session, user_id: int) -> dict[str, float] | None:
@@ -316,9 +378,9 @@ def compute_skill_scores(db: Session, user_id: int) -> dict[str, float] | None:
     rows = _load_placement_answer_rows(db, user_id)
     if not rows:
         return None
-    _, skill_correct, skill_total = _parse_answer_rows(rows)
+    _, _skill_correct, _skill_total, skill_earned_weight = _parse_answer_rows(rows)
     return {
-        skill: skill_correct[skill] / max(1, skill_total[skill]) for skill in SKILLS
+        skill: skill_earned_weight[skill] / MAX_SKILL_WEIGHT for skill in SKILLS
     }
 
 
@@ -358,18 +420,19 @@ def get_placement_test_result(db: Session, user_id: int) -> PlacementResultRespo
         )
 
     # Parse answers + accumulate per-skill counts (shared with compute_skill_scores)
-    answers, skill_correct, skill_total = _parse_answer_rows(rows)
+    answers, skill_correct, skill_total, skill_earned_weight = _parse_answer_rows(rows)
 
-    # Compute per-skill scores (fraction correct)
+    # Difficulty-weighted accuracy per skill (spec §3)
+    # Score = earned_weight / MAX_SKILL_WEIGHT (24) × 100
     skill_scores_fraction: dict[str, float] = {
-        skill: skill_correct[skill] / max(1, skill_total[skill]) for skill in SKILLS
+        skill: skill_earned_weight[skill] / MAX_SKILL_WEIGHT for skill in SKILLS
     }
 
-    # Overall score
+    # Raw counts (used for display: "X / Y correct")
     total_questions = sum(skill_total.values())
     total_correct = sum(skill_correct.values())
-    overall_fraction = total_correct / max(1, total_questions)
-    overall_percent = round(overall_fraction * 100)
+    # Overall percent = average weighted accuracy across all 4 skills
+    overall_percent = round(sum(skill_scores_fraction.values()) / max(1, len(SKILLS)) * 100)
 
     # Classify starting level and weak skills
     starting_level, weak_skills = classify_user(skill_scores_fraction)
@@ -390,6 +453,17 @@ def get_placement_test_result(db: Session, user_id: int) -> PlacementResultRespo
         skill: round(score * 100) for skill, score in skill_scores_fraction.items()
     }
 
+    # Load UserRadarScore if it exists
+    from app.models.user_radar_score import UserRadarScore
+    radar_score_record = db.query(UserRadarScore).filter(UserRadarScore.user_id == user_id).first()
+    radar_score = None
+    if radar_score_record:
+        radar_score = {
+            "start_vector": radar_score_record.start_vector,
+            "current_vector": radar_score_record.current_vector,
+            "prev_stack": radar_score_record.prev_stack,
+        }
+
     return PlacementResultResponse(
         learning_status=user.learning_status,
         total_questions=total_questions,
@@ -402,6 +476,7 @@ def get_placement_test_result(db: Session, user_id: int) -> PlacementResultRespo
         role_name=role_name,
         baseline=baseline,
         answers=answers,
+        radar_score=radar_score,
     )
 
 
@@ -503,6 +578,111 @@ def build_and_save_roadmap(db: Session, user_id: int) -> None:
     _build_and_save_roadmap(db, user_id)
 
 
+def _compute_topic_unlock_map(
+    topic_lessons: list[Lesson],
+    completed_lesson_ids: set[int],
+) -> dict[int, bool]:
+    unlock_map: dict[int, bool] = {}
+    previous_lesson_id: int | None = None
+
+    for lesson in topic_lessons:
+        unlock_map[lesson.id] = (
+            previous_lesson_id is None
+            or previous_lesson_id in completed_lesson_ids
+        )
+        previous_lesson_id = lesson.id
+
+    return unlock_map
+
+
+def get_assigned_topic_lessons(
+    db: Session,
+    topic_id: int,
+    track: str,
+) -> list[Lesson]:
+    lessons = (
+        db.query(Lesson)
+        .filter(Lesson.topic_id == topic_id)
+        .order_by(Lesson.id.asc())
+        .all()
+    )
+    return [
+        lesson
+        for lesson in lessons
+        if lesson_is_assigned(track, lesson.difficulty_tier)
+    ]
+
+
+def get_completed_lesson_ids_for_topic(
+    db: Session,
+    user_id: int,
+    topic_id: int,
+) -> set[int]:
+    rows = (
+        db.query(UserLesson.lesson_id)
+        .join(Lesson, Lesson.id == UserLesson.lesson_id)
+        .filter(
+            UserLesson.user_id == user_id,
+            UserLesson.completed_at.isnot(None),
+            Lesson.topic_id == topic_id,
+        )
+        .all()
+    )
+    return {int(lesson_id) for (lesson_id,) in rows}
+
+
+def lesson_is_unlocked_for_user(
+    db: Session,
+    user_id: int,
+    lesson: Lesson,
+    track: str,
+) -> bool:
+    topic_lessons = get_assigned_topic_lessons(db, lesson.topic_id, track)
+    completed_lesson_ids = get_completed_lesson_ids_for_topic(
+        db,
+        user_id,
+        lesson.topic_id,
+    )
+    unlock_map = _compute_topic_unlock_map(topic_lessons, completed_lesson_ids)
+    return unlock_map.get(lesson.id, False)
+
+
+def get_first_assigned_lesson_ids(db: Session, user_id: int) -> list[int]:
+    """Return the first assigned lesson id for each topic in the user's roadmap."""
+    rows = (
+        db.query(UserRoadmap)
+        .filter(UserRoadmap.user_id == user_id)
+        .order_by(UserRoadmap.sort_order.asc())
+        .all()
+    )
+    if not rows:
+        return []
+
+    track = rows[0].track
+    topic_ids = [row.topic_id for row in rows]
+    lessons = (
+        db.query(Lesson)
+        .filter(Lesson.topic_id.in_(topic_ids))
+        .order_by(Lesson.topic_id.asc(), Lesson.id.asc())
+        .all()
+    )
+
+    first_lesson_ids: list[int] = []
+    seen_topic_ids: set[int] = set()
+    for lesson in lessons:
+        if lesson.topic_id in seen_topic_ids:
+            continue
+        if not lesson_is_assigned(track, lesson.difficulty_tier):
+            continue
+        if lesson.is_generated:
+            seen_topic_ids.add(lesson.topic_id)
+            continue
+        first_lesson_ids.append(lesson.id)
+        seen_topic_ids.add(lesson.topic_id)
+
+    return first_lesson_ids
+
+
 def get_user_roadmap(db: Session, user_id: int) -> RoadmapResponse:
     """Fetch the user's roadmap with lessons inline. Auto-computes when empty."""
     from app.models.user import User
@@ -547,10 +727,31 @@ def get_user_roadmap(db: Session, user_id: int) -> RoadmapResponse:
         if lesson_is_assigned(track, lesson.difficulty_tier):
             lessons_by_topic.setdefault(lesson.topic_id, []).append(lesson)
 
+    completed_lesson_ids_by_topic: dict[int, set[int]] = {}
+    if topic_ids:
+        completed_rows = (
+            db.query(UserLesson.lesson_id, Lesson.topic_id)
+            .join(Lesson, Lesson.id == UserLesson.lesson_id)
+            .filter(
+                UserLesson.user_id == user_id,
+                UserLesson.completed_at.isnot(None),
+                Lesson.topic_id.in_(topic_ids),
+            )
+            .all()
+        )
+        for lesson_id, topic_id in completed_rows:
+            completed_lesson_ids_by_topic.setdefault(int(topic_id), set()).add(
+                int(lesson_id)
+            )
+
     roadmap_topics: list[RoadmapTopicResponse] = []
     total_estimated_minutes = 0
     for topic in topics:
         topic_lessons = lessons_by_topic.get(topic.id, [])
+        unlock_map = _compute_topic_unlock_map(
+            topic_lessons,
+            completed_lesson_ids_by_topic.get(topic.id, set()),
+        )
         topic_minutes = sum((lesson.estimated_minutes or 0) for lesson in topic_lessons)
         total_estimated_minutes += topic_minutes
         roadmap_topics.append(
@@ -569,8 +770,17 @@ def get_user_roadmap(db: Session, user_id: int) -> RoadmapResponse:
                         difficulty_tier=lesson.difficulty_tier,
                         estimated_minutes=lesson.estimated_minutes,
                         is_generated=bool(lesson.is_generated),
-                        theory_content=lesson.theory_content,
-                        quiz_content=lesson.quiz_content,
+                        is_unlocked=unlock_map.get(lesson.id, False),
+                        theory_content=(
+                            lesson.theory_content
+                            if unlock_map.get(lesson.id, False)
+                            else None
+                        ),
+                        quiz_content=(
+                            lesson.quiz_content
+                            if unlock_map.get(lesson.id, False)
+                            else None
+                        ),
                     )
                     for lesson in topic_lessons
                 ],

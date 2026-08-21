@@ -17,11 +17,19 @@ from app.feature.admin.admin_schema import (
     CostDashboardData,
     CostDay,
     DashboardData,
+    GenerationActiveJobResponse,
+    GenerationBlockersResponse,
+    GenerationSummaryResponse,
     GenerationStatusResponse,
     GeneratorBreakdown,
     KillSwitchState,
+    CourseGenerationSummaryResponse,
+    PlacementGenerationSummaryResponse,
     PreviewResponse,
     RejectedContentResponse,
+    AiUsageLogResponse,
+    UsageLogClearRequest,
+    UsageLogClearResponse,
     RoleCreate,
     RoleSkillDefinitions,
     RoleResponse,
@@ -44,6 +52,10 @@ from app.models.topic import Topic
 from app.models.user import LEARNING_ENROLLED, LEARNING_NONE, User
 from app.models.user_placement_test import UserPlacementTest
 from app.models.user_roadmap import UserRoadmap
+
+PLACEMENT_TARGET_COUNT = 48
+COURSE_TARGET_TOPICS = 20
+COURSE_TARGET_LESSONS = 120
 
 # ─── Serialization helpers ───────────────────────────────────────────────────
 
@@ -121,6 +133,59 @@ def _skill_definitions_blob(
     }
 
 
+def _workflow_for_step(step: str | None) -> str | None:
+    if step == "a":
+        return "placement"
+    if step in {"b1", "b2"}:
+        return "course"
+    return None
+
+
+def _latest_generation_for_workflow(
+    db: Session, role_id: int, workflow: str
+) -> RoleGeneration | None:
+    query = db.query(RoleGeneration).filter(RoleGeneration.role_id == role_id)
+    if workflow == "placement":
+        query = query.filter(RoleGeneration.step == "a")
+    else:
+        query = query.filter(RoleGeneration.step.in_(["b1", "b2"]))
+    return query.order_by(RoleGeneration.id.desc()).first()
+
+
+def _latest_active_generation(db: Session, role_id: int) -> RoleGeneration | None:
+    return (
+        db.query(RoleGeneration)
+        .filter(
+            RoleGeneration.role_id == role_id,
+            RoleGeneration.status.in_(["in_progress", "pending"]),
+        )
+        .order_by(RoleGeneration.id.desc())
+        .first()
+    )
+
+
+def _workflow_status(
+    latest: RoleGeneration | None, *, has_assets: bool, target_met: bool
+) -> str:
+    if latest is not None:
+        if latest.status in {"in_progress", "pending", "failed"}:
+            return latest.status
+        if latest.status == "completed":
+            return "completed" if (target_met or has_assets) else "empty"
+    return "completed" if has_assets else "empty"
+
+
+def _course_counts(db: Session, role_id: int) -> tuple[int, int]:
+    topics_count = db.query(Topic).filter(Topic.role_id == role_id).count()
+    lessons_count = (
+        db.query(Lesson)
+        .join(Topic, Lesson.topic_id == Topic.id)
+        .filter(Topic.role_id == role_id)
+        .count()
+    )
+    return topics_count, lessons_count
+
+
 def _role_to_response(db: Session, role: JobRole) -> RoleResponse:
     active_learners = count_active_learners(db, role.id)
     _mark_stale_generation(db, role.id)
@@ -130,13 +195,10 @@ def _role_to_response(db: Session, role: JobRole) -> RoleResponse:
         .order_by(RoleGeneration.id.desc())
         .first()
     )
-    topics_count = db.query(Topic).filter(Topic.role_id == role.id).count()
-    lessons_count = (
-        db.query(Lesson)
-        .join(Topic, Lesson.topic_id == Topic.id)
-        .filter(Topic.role_id == role.id)
-        .count()
-    )
+    placement_questions_count = get_placement_question_count(db, role.id)
+    topics_count, lessons_count = _course_counts(db, role.id)
+    placement_gen = _latest_generation_for_workflow(db, role.id, "placement")
+    course_gen = _latest_generation_for_workflow(db, role.id, "course")
     return RoleResponse(
         id=role.id,
         name=role.name,
@@ -148,9 +210,23 @@ def _role_to_response(db: Session, role: JobRole) -> RoleResponse:
         isActive=role.is_active,
         createdBy=role.created_by,
         activeLearnerCount=active_learners,
+        placementQuestionsCount=placement_questions_count,
         topicsCount=topics_count,
         lessonsCount=lessons_count,
         generationStatus=gen.status if gen else None,
+        placementGenerationStatus=_workflow_status(
+            placement_gen,
+            has_assets=placement_questions_count > 0,
+            target_met=placement_questions_count >= PLACEMENT_TARGET_COUNT,
+        ),
+        courseGenerationStatus=_workflow_status(
+            course_gen,
+            has_assets=topics_count > 0 or lessons_count > 0,
+            target_met=(
+                topics_count >= COURSE_TARGET_TOPICS
+                and lessons_count >= COURSE_TARGET_LESSONS
+            ),
+        ),
     )
 
 
@@ -616,6 +692,75 @@ def get_generation_status(db: Session, role_id: int) -> GenerationStatusResponse
     )
 
 
+def get_generation_summary(db: Session, role_id: int) -> GenerationSummaryResponse:
+    get_role_or_404(db, role_id)
+    _mark_stale_generation(db, role_id)
+
+    placement_questions_count = get_placement_question_count(db, role_id)
+    topics_count, lessons_count = _course_counts(db, role_id)
+    placement_gen = _latest_generation_for_workflow(db, role_id, "placement")
+    course_gen = _latest_generation_for_workflow(db, role_id, "course")
+    active_gen = _latest_active_generation(db, role_id)
+    kill_switch = get_kill_switch(db)
+    active_learners = count_active_learners(db, role_id)
+    saved_answers = has_saved_answers(db, role_id)
+
+    placement_status = _workflow_status(
+        placement_gen,
+        has_assets=placement_questions_count > 0,
+        target_met=placement_questions_count >= PLACEMENT_TARGET_COUNT,
+    )
+    course_status = _workflow_status(
+        course_gen,
+        has_assets=topics_count > 0 or lessons_count > 0,
+        target_met=(
+            topics_count >= COURSE_TARGET_TOPICS
+            and lessons_count >= COURSE_TARGET_LESSONS
+        ),
+    )
+
+    return GenerationSummaryResponse(
+        roleId=role_id,
+        activeJob=GenerationActiveJobResponse(
+            workflow=_workflow_for_step(active_gen.step) if active_gen else None,
+            status=active_gen.status if active_gen else None,
+            step=active_gen.step if active_gen else None,
+            startedAt=active_gen.started_at if active_gen else None,
+            finishedAt=active_gen.finished_at if active_gen else None,
+        ),
+        placement=PlacementGenerationSummaryResponse(
+            questionCount=placement_questions_count,
+            targetCount=PLACEMENT_TARGET_COUNT,
+            lastStatus=placement_status,
+            lastStartedAt=placement_gen.started_at if placement_gen else None,
+            lastFinishedAt=placement_gen.finished_at if placement_gen else None,
+            lastErrorMessage=placement_gen.error_message if placement_gen else None,
+        ),
+        course=CourseGenerationSummaryResponse(
+            topicsCount=topics_count,
+            targetTopics=COURSE_TARGET_TOPICS,
+            lessonsCount=lessons_count,
+            targetLessons=COURSE_TARGET_LESSONS,
+            currentStep=course_gen.step if course_gen else None,
+            lastStatus=course_status,
+            lastStartedAt=course_gen.started_at if course_gen else None,
+            lastFinishedAt=course_gen.finished_at if course_gen else None,
+            lastErrorMessage=course_gen.error_message if course_gen else None,
+            stepB1Count=course_gen.step_b1_count if course_gen else 0,
+            stepB1Errors=course_gen.step_b1_errors if course_gen else 0,
+            stepB2Count=course_gen.step_b2_count if course_gen else 0,
+            stepB2Errors=course_gen.step_b2_errors if course_gen else 0,
+        ),
+        blockers=GenerationBlockersResponse(
+            killSwitchOn=kill_switch.enabled,
+            killSwitchReason=kill_switch.reason,
+            activeLearnerCount=active_learners,
+            requiresLearnerResetForPlacement=saved_answers > 0,
+            requiresLearnerResetForCourse=active_learners > 0,
+        ),
+    )
+
+
 def get_placement_question_count(db: Session, role_id: int) -> int:
     return (
         db.query(PlacementTestQuestion)
@@ -834,6 +979,82 @@ def update_rejected_status(
     db.commit()
     db.refresh(row)
     return _rejected_to_response(db, row)
+
+
+# ─── AI usage logs ──────────────────────────────────────────────────────────
+
+
+USAGE_LOG_DEFAULT_LIMIT = 500
+USAGE_LOG_MAX_LIMIT = 2000
+
+
+def _usage_to_response(db: Session, row: AiUsageLog) -> AiUsageLogResponse:
+    role_name = None
+    if row.role_id is not None:
+        role = db.query(JobRole).filter(JobRole.id == row.role_id).first()
+        role_name = role.name if role else None
+    return AiUsageLogResponse(
+        id=row.id,
+        generator=row.generator,
+        model=row.model,
+        promptTokens=row.prompt_tokens,
+        completionTokens=row.completion_tokens,
+        costUsd=row.cost_usd,
+        status=row.status,
+        roleId=row.role_id,
+        roleName=role_name,
+        createdAt=row.created_at,
+    )
+
+
+def list_usage_logs(
+    db: Session,
+    generator: str | None = None,
+    status_filter: str | None = None,
+    role_id: int | None = None,
+    limit: int = USAGE_LOG_DEFAULT_LIMIT,
+) -> list[AiUsageLogResponse]:
+    capped = max(1, min(limit, USAGE_LOG_MAX_LIMIT))
+    query = db.query(AiUsageLog).order_by(AiUsageLog.created_at.desc(), AiUsageLog.id.desc())
+    if generator and generator != "all":
+        query = query.filter(AiUsageLog.generator == generator)
+    if status_filter and status_filter != "all":
+        query = query.filter(AiUsageLog.status == status_filter)
+    if role_id is not None:
+        query = query.filter(AiUsageLog.role_id == role_id)
+    rows = query.limit(capped).all()
+    return [_usage_to_response(db, r) for r in rows]
+
+
+def delete_usage_log(db: Session, log_id: int) -> None:
+    row = db.query(AiUsageLog).filter(AiUsageLog.id == log_id).first()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Usage log not found"
+        )
+    db.delete(row)
+    db.commit()
+
+
+def clear_usage_logs(
+    db: Session, filters: UsageLogClearRequest | None = None
+) -> UsageLogClearResponse:
+    """Bulk-delete usage logs. With no filters, clears the ENTIRE table.
+
+    Warning surfaced by the UI: irreversible audit-data loss — the AI Costs
+    dashboard aggregates (30d) and dashboard stats are computed from this table.
+    """
+    query = db.query(AiUsageLog)
+    if filters is not None:
+        if filters.generator:
+            query = query.filter(AiUsageLog.generator == filters.generator)
+        if filters.status:
+            query = query.filter(AiUsageLog.status == filters.status)
+        if filters.roleId is not None:
+            query = query.filter(AiUsageLog.role_id == filters.roleId)
+    deleted = query.delete(synchronize_session=False)
+    db.commit()
+    return UsageLogClearResponse(deletedCount=int(deleted))
 
 
 # ─── Kill switch ─────────────────────────────────────────────────────────────

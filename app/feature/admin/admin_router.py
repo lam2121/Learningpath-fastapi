@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.feature.admin import admin_service
 from app.feature.admin.admin_schema import (
+    AiUsageLogResponse,
     CostDashboardData,
     DashboardData,
     GenerateResponse,
@@ -19,6 +20,8 @@ from app.feature.admin.admin_schema import (
     RoleCreate,
     RoleResponse,
     RoleUpdate,
+    UsageLogClearRequest,
+    UsageLogClearResponse,
 )
 from app.feature.admin.dependencies import get_current_admin
 from app.models.user import User
@@ -173,6 +176,32 @@ def update_rejected_status(
     db: Session = Depends(get_db),
 ):
     return admin_service.update_rejected_status(db, rejected_id, payload.status)
+
+
+# ─── AI usage logs ──────────────────────────────────────────────────────────
+
+
+@router.get("/usage-logs", response_model=list[AiUsageLogResponse])
+def usage_logs(
+    generator: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    role_id: int | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=2000),
+    db: Session = Depends(get_db),
+):
+    return admin_service.list_usage_logs(
+        db, generator, status, role_id=role_id, limit=limit
+    )
+
+
+@router.delete("/usage-logs/{log_id}", status_code=204)
+def delete_usage_log(log_id: int, db: Session = Depends(get_db)):
+    admin_service.delete_usage_log(db, log_id)
+
+
+@router.post("/usage-logs/clear", response_model=UsageLogClearResponse)
+def clear_usage_logs(payload: UsageLogClearRequest, db: Session = Depends(get_db)):
+    return admin_service.clear_usage_logs(db, payload)
 
 
 @router.get("/kill-switch", response_model=KillSwitchState)

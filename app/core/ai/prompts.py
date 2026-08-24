@@ -373,7 +373,7 @@ Each of the 7 inner arrays has EXACTLY 4 elements:
    - Index 1: A 150-250 word realistic workplace dialogue with a clear context setup. Format strictly as: "Context: [1-2 sentences setting the scene: participants, setting, goal] || Dialogue: Speaker 1: [Turn] | Speaker 2: [Turn] | Speaker 1: [Turn] | ..."
    - Index 2: Two parts separated by " || ":
      Part A: At least 3 key communicative phrases used and why they work (format: "phrase - why it works | phrase2 - why it works").
-     Part B: 4 interactive completion tasks (2 questions to ask + 2 responses to give) for the learner to practice replying. Format: "Practice Tasks: 1. (Ask): [Prompt] | 2. (Ask): [Prompt] | 3. (Reply): [Prompt] | 4. (Reply): [Prompt]"
+     Part B: 4 interactive completion tasks (2 questions to ask + 2 responses to give) for the learner to practice replying, with suggested answers. Format: "Practice Tasks: 1. (Ask): [Prompt] -> Suggested Answer: [Answer] | 2. (Ask): [Prompt] -> Suggested Answer: [Answer] | 3. (Reply): [Prompt] -> Suggested Answer: [Answer] | 4. (Reply): [Prompt] -> Suggested Answer: [Answer]"
    - Index 3: Teacher note on pronunciation, rhythm, and active listening in IT meetings.
 
 6. listening

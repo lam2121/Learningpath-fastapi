@@ -88,17 +88,13 @@ def finalize_placement_test(
     and set learning_status = 'enrolled'.
     """
     try:
-        if current_user:
-            user_id = current_user.id
-        elif request.user_id:
-            user_id = request.user_id
-        else:
-            fallback_user = db.query(User).first()
-            if not fallback_user:
-                raise ValueError(
-                    "No user found in database for placement test fallback"
-                )
-            user_id = fallback_user.id
+        if not current_user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Sign in is required before saving a placement test result.",
+            )
+
+        user_id = current_user.id
 
         complete_placement_test(
             db,
@@ -175,23 +171,19 @@ def get_placement_test_result_endpoint(
     Fetch the current user's placement test result (scores, starting level, per-question detail).
     Returns a response with learning_status='none' if no result exists.
     """
-    # Resolve user_id: current_user -> fallback to first user (mirrors POST path)
-    if current_user:
-        user_id = current_user.id
-    else:
-        fallback_user = db.query(User).first()
-        if not fallback_user:
-            return PlacementResultResponse(
-                learning_status="none",
-                total_questions=0,
-                total_correct=0,
-                overall_percent=0,
-                skill_scores={},
-                starting_level="basic",
-                weak_skills=[],
-                answers=[],
-            )
-        user_id = fallback_user.id
+    if not current_user:
+        return PlacementResultResponse(
+            learning_status="none",
+            total_questions=0,
+            total_correct=0,
+            overall_percent=0,
+            skill_scores={},
+            starting_level="basic",
+            weak_skills=[],
+            answers=[],
+        )
+
+    user_id = current_user.id
 
     return get_placement_test_result(db, user_id=user_id)
 

@@ -206,6 +206,20 @@ def complete_placement_test(
     if not user:
         raise ValueError(f"User {user_id} not found")
 
+    existing_answer = (
+        db.query(UserPlacementTest.id)
+        .filter(UserPlacementTest.user_id == user_id)
+        .first()
+    )
+    if existing_answer is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This account already has a saved placement test score. "
+                "The existing score must be kept."
+            ),
+        )
+
     if role_id:
         role = db.query(JobRole).filter(JobRole.id == role_id).first()
         if role is not None and not role.is_active and user.job_role_id != role_id:

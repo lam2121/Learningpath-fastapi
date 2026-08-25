@@ -24,6 +24,7 @@ from app.feature.onboarding.lesson_quiz_service import (
     get_lesson_quiz_result_detail,
     get_lesson_quiz_state,
     submit_lesson_quiz,
+    evaluate_user_answer,
 )
 from app.feature.onboarding.roadmap_schema import (
     LessonGenerateResponse,
@@ -33,6 +34,8 @@ from app.feature.onboarding.roadmap_schema import (
     LessonQuizSubmitResponse,
     RoadmapResponse,
     RoadmapSelectRequest,
+    EvaluateAnswerRequest,
+    EvaluateAnswerResponse,
 )
 from app.models.job_role import JobRole
 from app.models.lesson import Lesson
@@ -409,3 +412,31 @@ def get_lesson_quiz_result_detail_endpoint(
     lesson = _get_owned_assigned_lesson(db, user_id, lesson_id)
     _require_unlocked_lesson(db, user_id, lesson)
     return get_lesson_quiz_result_detail(db, user_id, lesson)
+
+
+@router.post(
+    "/roadmap/evaluate-answer",
+    response_model=EvaluateAnswerResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def evaluate_answer_endpoint(
+    request: EvaluateAnswerRequest,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    """
+    Evaluate a user's free-text answer (for Reading, Dialogue, or Listening) using the AI.
+    """
+    try:
+        feedback = await evaluate_user_answer(
+            section_type=request.section_type,
+            context=request.context,
+            question=request.question,
+            reference_answer=request.reference_answer,
+            user_answer=request.user_answer,
+        )
+        return EvaluateAnswerResponse(feedback_summary=feedback)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Evaluation failed: {e}")

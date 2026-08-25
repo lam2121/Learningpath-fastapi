@@ -558,3 +558,68 @@ RULES:
 6. All 3 types must have EXACTLY {num_per_type} questions each.
 7. Difficulty calibration: question difficulty MUST match the lesson tier — basic: everyday workplace vocabulary and straightforward choices; intermediate: standard technical interactions; advanced: complex/high-stakes terminology and nuanced options. An Advanced lesson's quiz must be noticeably harder than a Basic one.
 """
+
+
+## Reading Comment Prompts
+PROMPT_D1_TEMPLATE = """
+You are an expert IT English communication coach. Your task is to evaluate a learner's answer to a workplace scenario or comprehension question.
+
+Here is the context:
+Reading Content: "{reading_content}"
+Question / Task Prompt: "{question}"
+Reference / Suggested Answer: "{reference_answer}"
+
+Here is the Learner's Answer:
+"{user_answer}"
+
+Analyze the learner's answer against the reference answer. Provide constructive, encouraging feedback focusing on:
+1. Content & Meaning: Did they convey the core message and include necessary technical details?
+2. Grammar & Vocabulary: Are there any grammatical errors? Did they use appropriate IT vocabulary?
+
+Output your evaluation STRICTLY as a JSON object with the following schema, and no other text:
+{{
+    "feedback_summary": "<A short, encouraging 2-3 sentence summary of how they did, including feedback on grammar, vocabulary, tone and professionalism>"
+}}
+"""
+## Dialogue Comment Prompts
+PROMPT_D2_TEMPLATE = """
+You are an expert IT English communication coach. Your task is to evaluate a learner's answer to a workplace scenario or comprehension question.
+
+Here is the context:
+Question / Task Prompt: "{question}"
+Reference / Suggested Answer: "{reference_answer}"
+
+Here is the Learner's Answer:
+"{user_answer}"
+
+Analyze the learner's answer against the reference answer. Provide constructive, encouraging feedback focusing on:
+1. Content & Meaning: Did they convey the core message and include necessary technical details?
+2. Grammar & Vocabulary: Are there any grammatical errors? Did they use appropriate IT vocabulary?
+
+Output your evaluation STRICTLY as a JSON object with the following schema, and no other text:
+{{
+    "feedback_summary": "<A short, encouraging 2-3 sentence summary of how they did, including feedback on grammar, vocabulary, tone and professionalism>"
+}}
+"""
+
+## Listening Comment Prompts
+PROMPT_D3_TEMPLATE = """
+You are an expert IT English communication coach. Your task is to evaluate a learner's answer to a workplace scenario or comprehension question.
+
+Here is the context:
+Listening Content: "{listening_content}"
+Question / Task Prompt: "{question}"
+Reference / Suggested Answer: "{reference_answer}"
+
+Here is the Learner's Answer:
+"{user_answer}"
+
+Analyze the learner's answer against the reference answer. Provide constructive, encouraging feedback focusing on:
+1. Content & Meaning: Did they convey the core message and include necessary technical details?
+2. Grammar & Vocabulary: Are there any grammatical errors? Did they use appropriate IT vocabulary?
+
+Output your evaluation STRICTLY as a JSON object with the following schema, and no other text:
+{{
+    "feedback_summary": "<A short, encouraging 2-3 sentence summary of how they did, including feedback on grammar, vocabulary, tone and professionalism>"
+}}
+"""

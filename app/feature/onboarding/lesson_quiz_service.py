@@ -17,6 +17,12 @@ from app.models.lesson import Lesson
 from app.models.topic import Topic
 from app.models.user_lesson import UserLesson
 from app.models.user_radar_score import UserRadarScore
+from app.core.ai.gemini import GeminiClientPool
+from app.core.ai.prompts import (
+    PROMPT_D1_TEMPLATE,
+    PROMPT_D2_TEMPLATE,
+    PROMPT_D3_TEMPLATE,
+)
 
 QUESTION_TYPE_KEYS = {
     "fill_blank": "fill",
@@ -612,3 +618,53 @@ def _get_user_lesson(db: Session, user_id: int, lesson_id: int) -> UserLesson | 
         .order_by(UserLesson.id.asc())
         .first()
     )
+
+
+async def evaluate_user_answer(
+    section_type: str,
+    context: str,
+    question: str,
+    reference_answer: str,
+    user_answer: str,
+) -> str:
+    if section_type == "reading":
+        prompt = PROMPT_D1_TEMPLATE.format(
+            reading_content=context,
+            question=question,
+            reference_answer=reference_answer,
+            user_answer=user_answer,
+        )
+    elif section_type == "dialogue":
+        prompt = PROMPT_D2_TEMPLATE.format(
+            question=question,
+            reference_answer=reference_answer,
+            user_answer=user_answer,
+        )
+    elif section_type == "listening":
+        prompt = PROMPT_D3_TEMPLATE.format(
+            listening_content=context,
+            question=question,
+            reference_answer=reference_answer,
+            user_answer=user_answer,
+        )
+    else:
+        raise ValueError(f"Unknown section type: {section_type}")
+
+    client = GeminiClientPool()
+    try:
+        response = await client.generate_json(prompt)
+        text = response.text.strip()
+        
+        # Clean markdown code blocks if any
+        if text.startswith("```json"):
+            text = text[7:]
+        elif text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+        
+        data = json.loads(text)
+        return data.get("feedback_summary", "Good effort! Keep practicing.")
+    except Exception as e:
+        return "Great effort! (AI evaluation unavailable at the moment)"

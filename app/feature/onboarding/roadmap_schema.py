@@ -137,3 +137,15 @@ class LessonQuizSubmitResponse(LessonQuizStateResponse):
     first_pass_radar_applied: bool
     current_attempt_is_new_best: bool
     question_results: list[LessonQuizQuestionResultResponse]
+
+from typing import Literal
+
+class EvaluateAnswerRequest(BaseModel):
+    section_type: Literal["reading", "dialogue", "listening"]
+    context: str
+    question: str
+    reference_answer: str
+    user_answer: str
+
+class EvaluateAnswerResponse(BaseModel):
+    feedback_summary: str

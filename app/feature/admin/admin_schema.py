@@ -270,6 +270,32 @@ class RejectedContentStatusUpdate(BaseModel):
     status: str
 
 
+# ─── AI usage logs ──────────────────────────────────────────────────────────
+
+
+class AiUsageLogResponse(BaseModel):
+    id: int
+    generator: str
+    model: str
+    promptTokens: int
+    completionTokens: int
+    costUsd: float
+    status: str
+    roleId: int | None = None
+    roleName: str | None = None
+    createdAt: datetime
+
+
+class UsageLogClearRequest(BaseModel):
+    generator: str | None = None
+    status: str | None = None
+    roleId: int | None = None
+
+
+class UsageLogClearResponse(BaseModel):
+    deletedCount: int
+
+
 # ─── Kill switch ────────────────────────────────────────────────────────────
 
 

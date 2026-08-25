@@ -27,6 +27,9 @@ from app.feature.admin.admin_schema import (
     PlacementGenerationSummaryResponse,
     PreviewResponse,
     RejectedContentResponse,
+    AiUsageLogResponse,
+    UsageLogClearRequest,
+    UsageLogClearResponse,
     RoleCreate,
     RoleSkillDefinitions,
     RoleResponse,
@@ -976,6 +979,82 @@ def update_rejected_status(
     db.commit()
     db.refresh(row)
     return _rejected_to_response(db, row)
+
+
+# ─── AI usage logs ──────────────────────────────────────────────────────────
+
+
+USAGE_LOG_DEFAULT_LIMIT = 500
+USAGE_LOG_MAX_LIMIT = 2000
+
+
+def _usage_to_response(db: Session, row: AiUsageLog) -> AiUsageLogResponse:
+    role_name = None
+    if row.role_id is not None:
+        role = db.query(JobRole).filter(JobRole.id == row.role_id).first()
+        role_name = role.name if role else None
+    return AiUsageLogResponse(
+        id=row.id,
+        generator=row.generator,
+        model=row.model,
+        promptTokens=row.prompt_tokens,
+        completionTokens=row.completion_tokens,
+        costUsd=row.cost_usd,
+        status=row.status,
+        roleId=row.role_id,
+        roleName=role_name,
+        createdAt=row.created_at,
+    )
+
+
+def list_usage_logs(
+    db: Session,
+    generator: str | None = None,
+    status_filter: str | None = None,
+    role_id: int | None = None,
+    limit: int = USAGE_LOG_DEFAULT_LIMIT,
+) -> list[AiUsageLogResponse]:
+    capped = max(1, min(limit, USAGE_LOG_MAX_LIMIT))
+    query = db.query(AiUsageLog).order_by(AiUsageLog.created_at.desc(), AiUsageLog.id.desc())
+    if generator and generator != "all":
+        query = query.filter(AiUsageLog.generator == generator)
+    if status_filter and status_filter != "all":
+        query = query.filter(AiUsageLog.status == status_filter)
+    if role_id is not None:
+        query = query.filter(AiUsageLog.role_id == role_id)
+    rows = query.limit(capped).all()
+    return [_usage_to_response(db, r) for r in rows]
+
+
+def delete_usage_log(db: Session, log_id: int) -> None:
+    row = db.query(AiUsageLog).filter(AiUsageLog.id == log_id).first()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Usage log not found"
+        )
+    db.delete(row)
+    db.commit()
+
+
+def clear_usage_logs(
+    db: Session, filters: UsageLogClearRequest | None = None
+) -> UsageLogClearResponse:
+    """Bulk-delete usage logs. With no filters, clears the ENTIRE table.
+
+    Warning surfaced by the UI: irreversible audit-data loss — the AI Costs
+    dashboard aggregates (30d) and dashboard stats are computed from this table.
+    """
+    query = db.query(AiUsageLog)
+    if filters is not None:
+        if filters.generator:
+            query = query.filter(AiUsageLog.generator == filters.generator)
+        if filters.status:
+            query = query.filter(AiUsageLog.status == filters.status)
+        if filters.roleId is not None:
+            query = query.filter(AiUsageLog.role_id == filters.roleId)
+    deleted = query.delete(synchronize_session=False)
+    db.commit()
+    return UsageLogClearResponse(deletedCount=int(deleted))
 
 
 # ─── Kill switch ─────────────────────────────────────────────────────────────

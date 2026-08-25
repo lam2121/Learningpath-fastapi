@@ -373,7 +373,7 @@ Each of the 7 inner arrays has EXACTLY 4 elements:
    - Index 1: A 150-250 word realistic workplace dialogue with a clear context setup. Format strictly as: "Context: [1-2 sentences setting the scene: participants, setting, goal] || Dialogue: Speaker 1: [Turn] | Speaker 2: [Turn] | Speaker 1: [Turn] | ..."
    - Index 2: Two parts separated by " || ":
      Part A: At least 3 key communicative phrases used and why they work (format: "phrase - why it works | phrase2 - why it works").
-     Part B: 4 interactive completion tasks (2 questions to ask + 2 responses to give) for the learner to practice replying. Format: "Practice Tasks: 1. (Ask): [Prompt] | 2. (Ask): [Prompt] | 3. (Reply): [Prompt] | 4. (Reply): [Prompt]"
+     Part B: 4 interactive completion tasks (2 questions to ask + 2 responses to give) for the learner to practice replying, with suggested answers. Format: "Practice Tasks: 1. (Ask): [Prompt] -> Suggested Answer: [Answer] | 2. (Ask): [Prompt] -> Suggested Answer: [Answer] | 3. (Reply): [Prompt] -> Suggested Answer: [Answer] | 4. (Reply): [Prompt] -> Suggested Answer: [Answer]"
    - Index 3: Teacher note on pronunciation, rhythm, and active listening in IT meetings.
 
 6. listening
@@ -557,4 +557,69 @@ RULES:
 5. CRITICAL: Use single quotes (') inside strings, never unescaped double quotes.
 6. All 3 types must have EXACTLY {num_per_type} questions each.
 7. Difficulty calibration: question difficulty MUST match the lesson tier — basic: everyday workplace vocabulary and straightforward choices; intermediate: standard technical interactions; advanced: complex/high-stakes terminology and nuanced options. An Advanced lesson's quiz must be noticeably harder than a Basic one.
+"""
+
+
+## Reading Comment Prompts
+PROMPT_D1_TEMPLATE = """
+You are an expert IT English communication coach. Your task is to evaluate a learner's answer to a workplace scenario or comprehension question.
+
+Here is the context:
+Reading Content: "{reading_content}"
+Question / Task Prompt: "{question}"
+Reference / Suggested Answer: "{reference_answer}"
+
+Here is the Learner's Answer:
+"{user_answer}"
+
+Analyze the learner's answer against the reference answer. Provide constructive, encouraging feedback focusing on:
+1. Content & Meaning: Did they convey the core message and include necessary technical details?
+2. Grammar & Vocabulary: Are there any grammatical errors? Did they use appropriate IT vocabulary?
+
+Output your evaluation STRICTLY as a JSON object with the following schema, and no other text:
+{{
+    "feedback_summary": "<A short, encouraging 2-3 sentence summary of how they did, including feedback on grammar, vocabulary, tone and professionalism>"
+}}
+"""
+## Dialogue Comment Prompts
+PROMPT_D2_TEMPLATE = """
+You are an expert IT English communication coach. Your task is to evaluate a learner's answer to a workplace scenario or comprehension question.
+
+Here is the context:
+Question / Task Prompt: "{question}"
+Reference / Suggested Answer: "{reference_answer}"
+
+Here is the Learner's Answer:
+"{user_answer}"
+
+Analyze the learner's answer against the reference answer. Provide constructive, encouraging feedback focusing on:
+1. Content & Meaning: Did they convey the core message and include necessary technical details?
+2. Grammar & Vocabulary: Are there any grammatical errors? Did they use appropriate IT vocabulary?
+
+Output your evaluation STRICTLY as a JSON object with the following schema, and no other text:
+{{
+    "feedback_summary": "<A short, encouraging 2-3 sentence summary of how they did, including feedback on grammar, vocabulary, tone and professionalism>"
+}}
+"""
+
+## Listening Comment Prompts
+PROMPT_D3_TEMPLATE = """
+You are an expert IT English communication coach. Your task is to evaluate a learner's answer to a workplace scenario or comprehension question.
+
+Here is the context:
+Listening Content: "{listening_content}"
+Question / Task Prompt: "{question}"
+Reference / Suggested Answer: "{reference_answer}"
+
+Here is the Learner's Answer:
+"{user_answer}"
+
+Analyze the learner's answer against the reference answer. Provide constructive, encouraging feedback focusing on:
+1. Content & Meaning: Did they convey the core message and include necessary technical details?
+2. Grammar & Vocabulary: Are there any grammatical errors? Did they use appropriate IT vocabulary?
+
+Output your evaluation STRICTLY as a JSON object with the following schema, and no other text:
+{{
+    "feedback_summary": "<A short, encouraging 2-3 sentence summary of how they did, including feedback on grammar, vocabulary, tone and professionalism>"
+}}
 """

@@ -85,3 +85,15 @@ class LoginResponse(BaseModel):
     email: str
     name: str
     role_id: Optional[int] = None
+
+
+class AICoachMessageRequest(BaseModel):
+    day_streak: int
+    lesson_learner: int
+    total_lesson_in_track: int
+    accuracy: float
+    daily_study_per_day: int
+
+
+class AICoachMessageResponse(BaseModel):
+    feedback_summary: str

@@ -621,3 +621,23 @@ Output your evaluation STRICTLY as a JSON object with the following schema, and 
     "feedback_summary": "<A short, encouraging 2-3 sentence summary of how they did, including feedback on grammar, vocabulary, tone and professionalism>"
 }}
 """
+
+## Profile Page AI Coach Prompts 
+PROMPT_E1_TEMPLATE ="""
+You're a IT english teacher, user is a student, who want to improve their english skills .
+
+Write a motivation and short comment (around 30 - 40 words) for user to encourage and inspire them to continue to learning based on some infomation of user:
+
+1. Day Streak: {day_streak}
+
+2. Lessons Learned: {lesson_learner} / {total_lesson_in_track} 
+
+3. Accuracy : {accuracy} / 100
+
+4. Daily Study Per Day : {daily_study_per_day}
+
+Output your evaluation STRICTLY as a JSON object with the following schema, and no other text:
+{{
+    "feedback_summary": "<you response>"
+}}
+""" 

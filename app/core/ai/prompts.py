@@ -1,9 +1,9 @@
 """Prompt templates for AI content generators.
- 
+
 Prompt A is copied verbatim from docs/06-consolidated-v2-spec.md §5.2.
 Do not modify the template text unless explicitly requested.
 """
- 
+
 NUM_PLACEMENT_QUESTIONS_PER_SKILL = 12
 SKILLS = ["D_doc", "C_comm", "T_trouble", "G_custom"]
 SKILL_TITLES = {
@@ -51,12 +51,12 @@ testing the "{target_skill}" skill.
 - Seed Tier 1 Data (Basic): "{seed_tier_1}"
 - Seed Tier 2 Data (Advanced): "{seed_tier_2}"
 - Questions: {num_questions} per call (distribute as 3 questions per difficulty band)
- 
+
 [REQUIREMENTS]
 1. Each inner array has EXACTLY 6 elements:
    Index 0: Target skill code (must be "{target_skill}")
    Index 1: Difficulty level (must be one of three: Easy, Medium, Hard)
-   Index 2: Question text (max 150 words, authentic IT scenario)
+   Index 2: Question text (max 100 words, authentic IT scenario)
    Index 3: "OptionA|OptionB|OptionC|OptionD" (pipe-separated)
    Index 4: Correct answer letter ("A", "B", "C", or "D")
    Index 5: Expanded skill layer ("Context_layer" or "Language_layer")

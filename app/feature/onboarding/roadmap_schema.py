@@ -37,24 +37,45 @@ class RoadmapResponse(BaseModel):
     total_estimated_minutes: int = 0
 
 
-class SkillOverrideRequest(BaseModel):
-    """Dev-mode skill-score override (0-12 each, §12.9)."""
+class SkillDifficultyBreakdown(BaseModel):
+    """Per-skill correct-answer counts by difficulty tier (dev-mode, v3 scoring)."""
 
-    D_doc: int = Field(ge=0, le=12)
-    C_comm: int = Field(ge=0, le=12)
-    T_trouble: int = Field(ge=0, le=12)
-    G_custom: int = Field(ge=0, le=12)
+    easy: int = Field(ge=0, le=4, description="Correct answers on Easy questions (0-4)")
+    medium: int = Field(ge=0, le=4, description="Correct answers on Medium questions (0-4)")
+    hard: int = Field(ge=0, le=4, description="Correct answers on Hard questions (0-4)")
+
+    def earned_weight(self) -> int:
+        """Weighted sum: Easy×1 + Medium×2 + Hard×3."""
+        return self.easy * 1 + self.medium * 2 + self.hard * 3
+
+
+class DevPlacementOverrideRequest(BaseModel):
+    """Dev-mode placement override: per-skill difficulty breakdown (v3 scoring)."""
+
+    D_doc: SkillDifficultyBreakdown
+    C_comm: SkillDifficultyBreakdown
+    T_trouble: SkillDifficultyBreakdown
+    G_custom: SkillDifficultyBreakdown
 
     def as_fractions(self) -> dict[str, float]:
-        """Convert the 0-12 slider values to correct/12 fractions."""
-        return {key: self.model_dump()[key] / 12.0 for key in SKILL_KEYS}
+        """Convert difficulty breakdowns to weighted-accuracy fractions (0.0-1.0).
+
+        Fraction = earned_weight / MAX_SKILL_WEIGHT, clamped to [0, 1].
+        """
+        from app.feature.onboarding.placement_test_service import MAX_SKILL_WEIGHT
+
+        result = {}
+        for key in SKILL_KEYS:
+            breakdown: SkillDifficultyBreakdown = getattr(self, key)
+            result[key] = min(breakdown.earned_weight() / MAX_SKILL_WEIGHT, 1.0)
+        return result
 
 
 class RoadmapSelectRequest(BaseModel):
     """Force-recompute the roadmap. `skills` is the dev-mode override."""
 
     role_id: int | None = None
-    skills: SkillOverrideRequest | None = None
+    skills: DevPlacementOverrideRequest | None = None
 
 
 class LessonGenerateResponse(BaseModel):

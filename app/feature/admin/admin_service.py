@@ -51,7 +51,11 @@ from app.models.system_setting import SystemSetting
 from app.models.topic import Topic
 from app.models.user import LEARNING_ENROLLED, LEARNING_NONE, User
 from app.models.user_placement_test import UserPlacementTest
+from app.models.user_radar_score import UserRadarScore
 from app.models.user_roadmap import UserRoadmap
+from app.models.user_lesson import UserLesson
+from app.models.queue import Queue
+from app.models.quiz import Quiz
 
 PLACEMENT_TARGET_COUNT = 48
 COURSE_TARGET_TOPICS = 20
@@ -606,10 +610,11 @@ def reset_role_learners(db: Session, role_id: int) -> dict:
     """De-enroll all learners of a role (docs/07 deviation #23).
 
     Clears their saved placement answers (they reference the role's questions),
-    their per-learner `user_roadmap` rows (they reference the role's topics), and
-    resets `learning_status`/`job_role_id` so the admin can regenerate the
-    placement questions or the course outline. Topics/lessons — the role-level
-    curriculum — are left untouched; only learner-owned rows are removed.
+    their per-learner `user_roadmap` rows (they reference the role's topics),
+    lesson progress, radar scores, SM-2 queue entries, and resets
+    `learning_status`/`job_role_id` so the admin can regenerate the placement
+    questions or the course outline. Topics/lessons — the role-level curriculum
+    — are left untouched; only learner-owned rows are removed.
     """
     get_role_or_404(db, role_id)
 
@@ -647,7 +652,58 @@ def reset_role_learners(db: Session, role_id: int) -> dict:
         )
         .all()
     )
+
+    cleared_lessons = 0
+    cleared_radar = 0
+    cleared_queue = 0
     for user in assigned:
+        # Lesson progress: only delete lessons belonging to this role's topics
+        lesson_ids = [
+            lid
+            for (lid,) in (
+                db.query(Lesson.id)
+                .join(Topic, Topic.id == Lesson.topic_id)
+                .filter(Topic.role_id == role_id)
+                .all()
+            )
+        ]
+        if lesson_ids:
+            cleared_lessons += (
+                db.query(UserLesson)
+                .filter(
+                    UserLesson.user_id == user.id,
+                    UserLesson.lesson_id.in_(lesson_ids),
+                )
+                .delete(synchronize_session=False)
+            )
+
+        cleared_radar += (
+            db.query(UserRadarScore)
+            .filter(UserRadarScore.user_id == user.id)
+            .delete(synchronize_session=False)
+        )
+
+        # SM-2 queue: quiz -> lesson -> topic -> role chain
+        quiz_ids = [
+            qid
+            for (qid,) in (
+                db.query(Quiz.id)
+                .join(Lesson, Lesson.id == Quiz.lesson_id)
+                .join(Topic, Topic.id == Lesson.topic_id)
+                .filter(Topic.role_id == role_id)
+                .all()
+            )
+        ]
+        if quiz_ids:
+            cleared_queue += (
+                db.query(Queue)
+                .filter(
+                    Queue.user_id == user.id,
+                    Queue.quiz_id.in_(quiz_ids),
+                )
+                .delete(synchronize_session=False)
+            )
+
         user.learning_status = LEARNING_NONE
         user.job_role_id = None
 
@@ -656,6 +712,9 @@ def reset_role_learners(db: Session, role_id: int) -> dict:
         "resetLearners": len(assigned),
         "clearedAnswers": cleared_answers,
         "clearedRoadmaps": cleared_roadmaps,
+        "clearedLessons": cleared_lessons,
+        "clearedRadarScores": cleared_radar,
+        "clearedQueueEntries": cleared_queue,
     }
 
 

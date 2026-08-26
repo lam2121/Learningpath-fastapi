@@ -5,7 +5,6 @@ endpoints (Google Gemini exposes one at /v1beta/openai). Providers are rotated
 round-robin on 429/quota/5xx/network errors with exponential backoff and a
 short per-provider cooldown so an exhausted key is not hammered repeatedly.
 
-- response_format={"type": "json_object"} everywhere
 - request timeout
 - simple global rate limit (~250 RPM, spec §7.2)
 - kill-switch guard: raises when `ai_generation_enabled=false`

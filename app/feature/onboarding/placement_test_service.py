@@ -18,10 +18,10 @@ from app.feature.onboarding.placement_test_schema import (
     PlacementTestQuestionResponse,
 )
 from app.feature.onboarding.roadmap_schema import (
+    DevPlacementOverrideRequest,
     RoadmapLessonResponse,
     RoadmapResponse,
     RoadmapTopicResponse,
-    SkillOverrideRequest,
 )
 from app.models.job_role import DEFAULT_BASELINE, JobRole
 from app.models.lesson import Lesson
@@ -30,7 +30,9 @@ from app.models.topic import Topic
 from app.models.user import LEARNING_ENROLLED, LEARNING_NONE
 from app.models.user_lesson import UserLesson
 from app.models.user_placement_test import UserPlacementTest
+from app.models.user_radar_score import UserRadarScore
 from app.models.user_roadmap import UserRoadmap
+from app.models.queue import Queue
 
 # Map v2.1 full tag -> short letter used by the existing frontend response
 SKILL_TAG_TO_SHORT = {
@@ -40,9 +42,9 @@ SKILL_TAG_TO_SHORT = {
     "G_custom": "G",
 }
 
-# level column stores plain strings: 'Easy' | 'Medium' | 'Hard' | 'Expert'
+# level column stores plain strings: 'Easy' | 'Medium' | 'Hard'
 
-# Difficulty-weighted scoring (spec §3)
+# Difficulty-weighted scoring (v3: learning-path-scoring-design-v3.md §3)
 # Each skill: 4×Easy (weight 1) + 4×Medium (weight 2) + 4×Hard (weight 3)
 # = 4 + 8 + 12 = 24
 DIFFICULTY_WEIGHT: dict[str, int] = {
@@ -51,6 +53,17 @@ DIFFICULTY_WEIGHT: dict[str, int] = {
     "Hard": 3,
 }
 MAX_SKILL_WEIGHT = 24
+
+
+def _cleanup_user_progress(db: Session, user_id: int) -> None:
+    """Remove all learning progress for a user.
+
+    Deletes: lesson progress, radar scores, SM-2 spaced-repetition queue.
+    Placement answers and roadmap are handled separately by the caller.
+    """
+    db.query(UserLesson).filter(UserLesson.user_id == user_id).delete()
+    db.query(UserRadarScore).filter(UserRadarScore.user_id == user_id).delete()
+    db.query(Queue).filter(Queue.user_id == user_id).delete()
 
 
 def fetch_questions_by_role(
@@ -211,13 +224,12 @@ def complete_placement_test(
         .first()
     )
     if existing_answer is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "This account already has a saved placement test score. "
-                "The existing score must be kept."
-            ),
-        )
+        # Re-enrollment (e.g. "Change Career Track"): clean up previous
+        # progress so the user starts fresh with the new track.
+        _cleanup_user_progress(db, user_id)
+        db.query(UserPlacementTest).filter(
+            UserPlacementTest.user_id == user_id
+        ).delete()
 
     if role_id:
         role = db.query(JobRole).filter(JobRole.id == role_id).first()
@@ -257,8 +269,6 @@ def _initialize_radar_score(db: Session, user_id: int):
     weighted accuracy (spec §3), and saves it into UserRadarScore.
     start_vector = weighted_accuracy × INITIAL_RADAR_SCALE per skill.
     """
-    from app.models.user_radar_score import UserRadarScore
-
     # Delete any existing record for this user
     db.query(UserRadarScore).filter(UserRadarScore.user_id == user_id).delete()
 
@@ -812,17 +822,19 @@ def recompute_roadmap(
     db: Session,
     user_id: int,
     *,
-    skills: SkillOverrideRequest | None = None,
+    skills: DevPlacementOverrideRequest | None = None,
     role_id: int | None = None,
 ) -> RoadmapResponse:
     """Force-recompute the roadmap (idempotent delete+insert).
 
     - Without `skills`: rebuilds from the user's stored placement answers
       (existing E2E use).
-    - With `skills` (dev-mode, §12.9): skips placement answers entirely —
-      `fraction = value / 12` -> classify -> select. Returns 404 in production.
+    - With `skills` (dev-mode): skips placement answers entirely —
+      weighted accuracy from difficulty breakdown -> classify -> select ->
+      initialize radar. Returns 404 in production.
     """
     from app.models.user import User
+    from app.models.user_radar_score import UserRadarScore
 
     if skills is not None:
         if app_config.APP_ENV == "production":
@@ -830,7 +842,8 @@ def recompute_roadmap(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Skill-score override is disabled in production",
             )
-        track, weak_skills = classify_user(skills.as_fractions())
+        fractions = skills.as_fractions()
+        track, weak_skills = classify_user(fractions)
         user = db.query(User).filter(User.id == user_id).first()
         role_id = role_id or (user.job_role_id if user else None)
         if not role_id:
@@ -854,6 +867,26 @@ def recompute_roadmap(
             user.job_role_id = role_id
             user.learning_status = LEARNING_ENROLLED
             db.commit()
+
+        # Initialize radar from dev-mode difficulty breakdown (v3 scoring).
+        # start_vector = weighted_accuracy% × 0.85 per skill.
+        INITIAL_RADAR_SCALE = 0.85
+        db.query(UserRadarScore).filter(
+            UserRadarScore.user_id == user_id
+        ).delete()
+        start_vector = {
+            skill: fractions[skill] * 100 * INITIAL_RADAR_SCALE
+            for skill in SKILLS
+        }
+        prev_stack = {s: [] for s in SKILLS}
+        radar = UserRadarScore(
+            user_id=user_id,
+            start_vector=start_vector,
+            current_vector=start_vector.copy(),
+            prev_stack=prev_stack,
+        )
+        db.add(radar)
+        db.commit()
     else:
         _build_and_save_roadmap(db, user_id, raise_on_missing=True)
 

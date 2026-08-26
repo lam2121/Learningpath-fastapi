@@ -2,7 +2,7 @@ import json
 from datetime import date, datetime, timedelta
 from math import ceil
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
@@ -25,8 +25,10 @@ from app.core.ai.prompts import PROMPT_E1_TEMPLATE
 from app.feature.onboarding.lesson_quiz_scoring import LESSON_PASS_THRESHOLD_PERCENT
 from app.models.lesson import Lesson
 from app.models.topic import Topic
-from app.models.user import User
+from app.models.user import LEARNING_NONE, User
+from app.models.user_course import UserCourse
 from app.models.user_lesson import UserLesson
+from app.models.user_placement_test import UserPlacementTest
 from app.models.user_radar_score import UserRadarScore
 from app.models.user_roadmap import UserRoadmap
 
@@ -408,6 +410,36 @@ def _build_user_profile_response(db: Session, user: User) -> UserProfileResponse
     )
 
 
+def _reset_user_career_track(db: Session, user: User) -> None:
+    try:
+        db.query(UserCourse).filter(UserCourse.user_id == user.id).delete(
+            synchronize_session=False
+        )
+        db.query(UserLesson).filter(UserLesson.user_id == user.id).delete(
+            synchronize_session=False
+        )
+        db.query(UserRoadmap).filter(UserRoadmap.user_id == user.id).delete(
+            synchronize_session=False
+        )
+        db.query(UserRadarScore).filter(UserRadarScore.user_id == user.id).delete(
+            synchronize_session=False
+        )
+        db.query(UserPlacementTest).filter(
+            UserPlacementTest.user_id == user.id
+        ).delete(synchronize_session=False)
+
+        user.job_role_id = None
+        user.learning_status = LEARNING_NONE
+        db.add(user)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not reset career track. Please try again.",
+        ) from exc
+
+
 @router.post(
     "/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED
 )
@@ -486,6 +518,15 @@ def update_study_settings(
     return _build_user_profile_response(db, current_user)
 
 
+@router.delete("/me/career-track", status_code=status.HTTP_204_NO_CONTENT)
+def delete_career_track(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _reset_user_career_track(db, current_user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/me/ai-coach-message", response_model=AICoachMessageResponse)
 async def generate_ai_coach_message(
     payload: AICoachMessageRequest,
@@ -511,4 +552,3 @@ async def generate_ai_coach_message(
         return AICoachMessageResponse(feedback_summary="Keep up the good work! Consistent practice is the key to mastering IT English.")
     finally:
         await client.close()
-

@@ -195,6 +195,9 @@ class ResetLearnersResponse(BaseModel):
     resetLearners: int
     clearedAnswers: int
     clearedRoadmaps: int
+    clearedLessons: int
+    clearedRadarScores: int
+    clearedQueueEntries: int
 
 
 # ─── Preview (stubbed) ───────────────────────────────────────────────────────

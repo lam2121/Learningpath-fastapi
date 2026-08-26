@@ -30,7 +30,9 @@ from app.models.topic import Topic
 from app.models.user import LEARNING_ENROLLED, LEARNING_NONE
 from app.models.user_lesson import UserLesson
 from app.models.user_placement_test import UserPlacementTest
+from app.models.user_radar_score import UserRadarScore
 from app.models.user_roadmap import UserRoadmap
+from app.models.queue import Queue
 
 # Map v2.1 full tag -> short letter used by the existing frontend response
 SKILL_TAG_TO_SHORT = {
@@ -51,6 +53,17 @@ DIFFICULTY_WEIGHT: dict[str, int] = {
     "Hard": 3,
 }
 MAX_SKILL_WEIGHT = 24
+
+
+def _cleanup_user_progress(db: Session, user_id: int) -> None:
+    """Remove all learning progress for a user.
+
+    Deletes: lesson progress, radar scores, SM-2 spaced-repetition queue.
+    Placement answers and roadmap are handled separately by the caller.
+    """
+    db.query(UserLesson).filter(UserLesson.user_id == user_id).delete()
+    db.query(UserRadarScore).filter(UserRadarScore.user_id == user_id).delete()
+    db.query(Queue).filter(Queue.user_id == user_id).delete()
 
 
 def fetch_questions_by_role(
@@ -211,13 +224,12 @@ def complete_placement_test(
         .first()
     )
     if existing_answer is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "This account already has a saved placement test score. "
-                "The existing score must be kept."
-            ),
-        )
+        # Re-enrollment (e.g. "Change Career Track"): clean up previous
+        # progress so the user starts fresh with the new track.
+        _cleanup_user_progress(db, user_id)
+        db.query(UserPlacementTest).filter(
+            UserPlacementTest.user_id == user_id
+        ).delete()
 
     if role_id:
         role = db.query(JobRole).filter(JobRole.id == role_id).first()
@@ -257,8 +269,6 @@ def _initialize_radar_score(db: Session, user_id: int):
     weighted accuracy (spec §3), and saves it into UserRadarScore.
     start_vector = weighted_accuracy × INITIAL_RADAR_SCALE per skill.
     """
-    from app.models.user_radar_score import UserRadarScore
-
     # Delete any existing record for this user
     db.query(UserRadarScore).filter(UserRadarScore.user_id == user_id).delete()
 

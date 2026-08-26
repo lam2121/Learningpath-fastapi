@@ -18,10 +18,10 @@ from app.feature.onboarding.placement_test_schema import (
     PlacementTestQuestionResponse,
 )
 from app.feature.onboarding.roadmap_schema import (
+    DevPlacementOverrideRequest,
     RoadmapLessonResponse,
     RoadmapResponse,
     RoadmapTopicResponse,
-    SkillOverrideRequest,
 )
 from app.models.job_role import DEFAULT_BASELINE, JobRole
 from app.models.lesson import Lesson
@@ -40,18 +40,17 @@ SKILL_TAG_TO_SHORT = {
     "G_custom": "G",
 }
 
-# level column stores plain strings: 'Easy' | 'Medium' | 'Hard' | 'Expert'
+# level column stores plain strings: 'Easy' | 'Medium' | 'Hard'
 
-# Difficulty-weighted scoring (spec §3)
-# Each skill: 3×Easy (weight 1) + 3×Medium (weight 2) + 3×Hard (weight 3) + 3×Expert (weight 4)
-# = 3 + 6 + 9 + 12 = 30
+# Difficulty-weighted scoring (v3: learning-path-scoring-design-v3.md §3)
+# Each skill: 4×Easy (weight 1) + 4×Medium (weight 2) + 4×Hard (weight 3)
+# = 4 + 8 + 12 = 24
 DIFFICULTY_WEIGHT: dict[str, int] = {
     "Easy": 1,
     "Medium": 2,
     "Hard": 3,
-    "Expert": 4,
 }
-MAX_SKILL_WEIGHT = 30
+MAX_SKILL_WEIGHT = 24
 
 
 def fetch_questions_by_role(
@@ -799,17 +798,19 @@ def recompute_roadmap(
     db: Session,
     user_id: int,
     *,
-    skills: SkillOverrideRequest | None = None,
+    skills: DevPlacementOverrideRequest | None = None,
     role_id: int | None = None,
 ) -> RoadmapResponse:
     """Force-recompute the roadmap (idempotent delete+insert).
 
     - Without `skills`: rebuilds from the user's stored placement answers
       (existing E2E use).
-    - With `skills` (dev-mode, §12.9): skips placement answers entirely —
-      `fraction = value / 12` -> classify -> select. Returns 404 in production.
+    - With `skills` (dev-mode): skips placement answers entirely —
+      weighted accuracy from difficulty breakdown -> classify -> select ->
+      initialize radar. Returns 404 in production.
     """
     from app.models.user import User
+    from app.models.user_radar_score import UserRadarScore
 
     if skills is not None:
         if app_config.APP_ENV == "production":
@@ -817,7 +818,8 @@ def recompute_roadmap(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Skill-score override is disabled in production",
             )
-        track, weak_skills = classify_user(skills.as_fractions())
+        fractions = skills.as_fractions()
+        track, weak_skills = classify_user(fractions)
         user = db.query(User).filter(User.id == user_id).first()
         role_id = role_id or (user.job_role_id if user else None)
         if not role_id:
@@ -841,6 +843,26 @@ def recompute_roadmap(
             user.job_role_id = role_id
             user.learning_status = LEARNING_ENROLLED
             db.commit()
+
+        # Initialize radar from dev-mode difficulty breakdown (v3 scoring).
+        # start_vector = weighted_accuracy% × 0.85 per skill.
+        INITIAL_RADAR_SCALE = 0.85
+        db.query(UserRadarScore).filter(
+            UserRadarScore.user_id == user_id
+        ).delete()
+        start_vector = {
+            skill: fractions[skill] * 100 * INITIAL_RADAR_SCALE
+            for skill in SKILLS
+        }
+        prev_stack = {s: [] for s in SKILLS}
+        radar = UserRadarScore(
+            user_id=user_id,
+            start_vector=start_vector,
+            current_vector=start_vector.copy(),
+            prev_stack=prev_stack,
+        )
+        db.add(radar)
+        db.commit()
     else:
         _build_and_save_roadmap(db, user_id, raise_on_missing=True)
 

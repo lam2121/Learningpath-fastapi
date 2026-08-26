@@ -17,7 +17,11 @@ from app.feature.auth.auth_schema import (
     UserCreate,
     UserProfileResponse,
     UserResponse,
+    AICoachMessageRequest,
+    AICoachMessageResponse,
 )
+from app.core.ai.gemini import GeminiClientPool
+from app.core.ai.prompts import PROMPT_E1_TEMPLATE
 from app.feature.onboarding.lesson_quiz_scoring import LESSON_PASS_THRESHOLD_PERCENT
 from app.models.lesson import Lesson
 from app.models.topic import Topic
@@ -480,3 +484,31 @@ def update_study_settings(
     db.commit()
     db.refresh(current_user)
     return _build_user_profile_response(db, current_user)
+
+
+@router.post("/me/ai-coach-message", response_model=AICoachMessageResponse)
+async def generate_ai_coach_message(
+    payload: AICoachMessageRequest,
+    current_user: User = Depends(get_current_user),
+):
+    prompt = PROMPT_E1_TEMPLATE.format(
+        day_streak=payload.day_streak,
+        lesson_learner=payload.lesson_learner,
+        total_lesson_in_track=payload.total_lesson_in_track,
+        accuracy=payload.accuracy,
+        daily_study_per_day=payload.daily_study_per_day,
+    )
+    
+    client = GeminiClientPool()
+    try:
+        response = await client.generate_json(prompt)
+        # GeminiClientPool returns an LLMResponse which has 'text' as the json string
+        import json
+        result = json.loads(response.text)
+        return AICoachMessageResponse(feedback_summary=result.get("feedback_summary", "Keep up the great work!"))
+    except Exception as e:
+        # Fallback message in case of LLM failure
+        return AICoachMessageResponse(feedback_summary="Keep up the good work! Consistent practice is the key to mastering IT English.")
+    finally:
+        await client.close()
+

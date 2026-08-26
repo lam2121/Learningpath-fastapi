@@ -1,15 +1,5 @@
-#!/usr/bin/env python3
 """Backfill lesson.estimated_minutes from saved theory/quiz content."""
-
-from pathlib import Path
-import sys
-
-
-# Allow running this script directly from the repo without installing the app package.
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
+#python3 scripts/backfill_lesson_estimated_minutes.py
 from app.core.database import SessionLocal
 from app.core.lesson_duration import estimate_lesson_duration
 from app.models.lesson import Lesson

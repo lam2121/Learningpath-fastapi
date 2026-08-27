@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api_router import api_router
+from app.core.notification_stream import notification_stream_broker
 from app.feature.audio.tts_service import clean_audio_cache
 
 
@@ -14,6 +15,7 @@ async def lifespan(application: FastAPI):
     """Startup / shutdown lifecycle hook."""
     # Clean stale audio cache on boot
     clean_audio_cache()
+    notification_stream_broker.attach_loop()
     yield
 
 

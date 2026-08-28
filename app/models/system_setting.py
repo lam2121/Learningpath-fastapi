@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 from sqlalchemy import Column, DateTime, String, text
 from sqlalchemy.dialects.mysql import BIGINT, LONGTEXT
 
@@ -6,7 +8,7 @@ from app.core.database import Base
 
 class SystemSetting(Base):
     __tablename__ = "system_setting"
-    __table_args__ = {
+    __table_args__: ClassVar[dict[str, str]] = {
         "comment": "Key/value settings (single-row per key). ai_generation_enabled = false blocks generation"
     }
 

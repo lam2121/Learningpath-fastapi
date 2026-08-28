@@ -1,5 +1,4 @@
 from datetime import date, datetime
-from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -26,7 +25,7 @@ class UserLogin(BaseModel):
 # 4. Schema trả về cho Client (Giấu hoàn toàn hashed_password)
 class UserResponse(UserBase):
     id: int
-    role_id: Optional[int] = None
+    role_id: int | None = None
     created_at: datetime
 
     # Cấu hình này giúp Pydantic đọc được dữ liệu từ SQLAlchemy Model
@@ -84,7 +83,7 @@ class LoginResponse(BaseModel):
     user_id: int
     email: str
     name: str
-    role_id: Optional[int] = None
+    role_id: int | None = None
 
 
 class AICoachMessageRequest(BaseModel):

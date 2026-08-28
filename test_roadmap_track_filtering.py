@@ -16,6 +16,9 @@ class FakeQuery:
     def filter(self, *args, **kwargs):
         return self
 
+    def join(self, *args, **kwargs):
+        return self
+
     def order_by(self, *args, **kwargs):
         return self
 
@@ -30,8 +33,12 @@ class FakeDB:
     def __init__(self, query_rows):
         self.query_rows = query_rows
 
-    def query(self, model):
-        return FakeQuery(self.query_rows[model])
+    def query(self, *models):
+        if len(models) == 1:
+            return FakeQuery(self.query_rows[models[0]])
+        # Multi-entity queries (e.g. db.query(UserLesson.lesson_id, Lesson.topic_id))
+        # are exercised via a JOIN and return no rows in these mocks.
+        return FakeQuery([])
 
 
 class RoadmapTrackFilteringTest(unittest.TestCase):

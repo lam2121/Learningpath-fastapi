@@ -6,7 +6,6 @@ Run with: python -m app.seed_job_roles
 from app.core.database import SessionLocal
 from app.models.job_role import JobRole
 
-
 ROLE_CATALOG = [
     {
         "name": "Project Manager",

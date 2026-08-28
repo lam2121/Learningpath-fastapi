@@ -1,6 +1,8 @@
-from sqlalchemy import Column, JSON, DateTime, ForeignKey, Index, text
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Index, text
 from sqlalchemy.dialects.mysql import BIGINT
+
 from app.core.database import Base
+
 
 class UserRadarScore(Base):
     __tablename__ = 'user_radar_score'

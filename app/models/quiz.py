@@ -1,6 +1,8 @@
-from sqlalchemy import Column, String, ForeignKey, Index
+from sqlalchemy import Column, ForeignKey, Index, String
 from sqlalchemy.dialects.mysql import BIGINT, LONGTEXT
+
 from app.core.database import Base
+
 
 class Quiz(Base):
     __tablename__ = 'quiz'

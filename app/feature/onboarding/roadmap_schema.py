@@ -161,6 +161,7 @@ class LessonQuizSubmitResponse(LessonQuizStateResponse):
 
 from typing import Literal
 
+
 class EvaluateAnswerRequest(BaseModel):
     section_type: Literal["reading", "dialogue", "listening"]
     context: str

@@ -26,7 +26,6 @@ from app.core.ai.gemini import (
     LLMResponse,
     assert_generation_enabled,
 )
-from app.core.lesson_duration import estimate_lesson_duration
 from app.core.ai.prompts import (
     SKILLS,
     build_prompt_a,
@@ -49,6 +48,7 @@ from app.core.ai.validators import (
 )
 from app.core.config import app_config
 from app.core.database import SessionLocal
+from app.core.lesson_duration import estimate_lesson_duration
 from app.core.notification_stream import notification_stream_broker
 from app.models.ai_usage_log import AiUsageLog
 from app.models.generation import RoleGeneration

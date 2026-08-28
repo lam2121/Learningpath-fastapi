@@ -1,6 +1,8 @@
-from sqlalchemy import Column, String, DateTime, Float, JSON, ForeignKey, Index, text, Integer
+from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.mysql import BIGINT
+
 from app.core.database import Base
+
 
 class UserLesson(Base):
     __tablename__ = 'user_lesson'

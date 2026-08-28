@@ -50,16 +50,13 @@ def calculate_similarity_and_diff(
             for w in target_words[i1:i2]:
                 word_analysis.append(STTWordMatch(word=w, status="mispronounced"))
                 missing_words.append(w)
-            for w in trans_words[j1:j2]:
-                extra_words.append(w)
+            extra_words.extend(trans_words[j1:j2])
         elif tag == "delete":
             for w in target_words[i1:i2]:
                 word_analysis.append(STTWordMatch(word=w, status="missing"))
                 missing_words.append(w)
         elif tag == "insert":
-            for w in trans_words[j1:j2]:
-                word_analysis.append(STTWordMatch(word=w, status="extra"))
-                extra_words.append(w)
+            extra_words.extend(trans_words[j1:j2])
 
     # Generate constructive pedagogical feedback
     if accuracy_score >= 90:

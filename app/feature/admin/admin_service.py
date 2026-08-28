@@ -4,7 +4,7 @@ Role CRUD, Generator A kickoff/status, dashboard, AI costs, rejected content,
 and the kill switch.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
@@ -12,29 +12,29 @@ from sqlalchemy.orm import Session
 
 from app.core.ai.gemini import AI_GENERATION_ENABLED_KEY, generation_enabled
 from app.feature.admin.admin_schema import (
+    AiUsageLogResponse,
     Baseline,
     CostAlert,
     CostDashboardData,
     CostDay,
+    CourseGenerationSummaryResponse,
     DashboardData,
     GenerationActiveJobResponse,
     GenerationBlockersResponse,
-    GenerationSummaryResponse,
     GenerationStatusResponse,
+    GenerationSummaryResponse,
     GeneratorBreakdown,
     KillSwitchState,
-    CourseGenerationSummaryResponse,
     PlacementGenerationSummaryResponse,
     PreviewResponse,
     RejectedContentResponse,
-    AiUsageLogResponse,
+    RoleCreate,
+    RoleResponse,
+    RoleSkillDefinitions,
+    RoleUpdate,
+    SkillDefinition,
     UsageLogClearRequest,
     UsageLogClearResponse,
-    RoleCreate,
-    RoleSkillDefinitions,
-    RoleResponse,
-    SkillDefinition,
-    RoleUpdate,
 )
 from app.models.ai_usage_log import AiUsageLog
 from app.models.generation import RoleGeneration
@@ -46,16 +46,16 @@ from app.models.job_role import (
 )
 from app.models.lesson import Lesson
 from app.models.placement_test_question import PlacementTestQuestion
+from app.models.queue import Queue
+from app.models.quiz import Quiz
 from app.models.rejected_content import RejectedContent
 from app.models.system_setting import SystemSetting
 from app.models.topic import Topic
 from app.models.user import LEARNING_ENROLLED, LEARNING_NONE, User
+from app.models.user_lesson import UserLesson
 from app.models.user_placement_test import UserPlacementTest
 from app.models.user_radar_score import UserRadarScore
 from app.models.user_roadmap import UserRoadmap
-from app.models.user_lesson import UserLesson
-from app.models.queue import Queue
-from app.models.quiz import Quiz
 
 PLACEMENT_TARGET_COUNT = 48
 COURSE_TARGET_TOPICS = 20
@@ -405,14 +405,14 @@ def _mark_stale_generation(db: Session, role_id: int) -> None:
             RoleGeneration.status.in_(["in_progress", "pending"]),
             RoleGeneration.started_at.isnot(None),
             RoleGeneration.started_at
-            < datetime.utcnow() - timedelta(minutes=STALE_GENERATION_MINUTES),
+            < datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=STALE_GENERATION_MINUTES),
         )
         .all()
     )
     for gen in stale:
         gen.status = "failed"
         gen.error_message = "Marked failed: generation did not finish within timeout"
-        gen.finished_at = datetime.utcnow()
+        gen.finished_at = datetime.now(UTC).replace(tzinfo=None)
     if stale:
         db.commit()
 
@@ -480,7 +480,7 @@ def kickoff_generation(db: Session, role_id: int, force: bool = False) -> dict:
             role_id=role_id,
             status="in_progress",
             step="a",
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(UTC).replace(tzinfo=None),
         )
     )
     db.commit()
@@ -546,7 +546,7 @@ def kickoff_course_generation(db: Session, role_id: int, force: bool = False) ->
             role_id=role_id,
             status="in_progress",
             step="b1",
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(UTC).replace(tzinfo=None),
         )
     )
     db.commit()
@@ -872,7 +872,7 @@ def preview_generation(
 
 
 def get_dashboard(db: Session) -> DashboardData:
-    now = datetime.now()
+    now = datetime.now(UTC).replace(tzinfo=None)
     since = now - timedelta(days=30)
 
     total_tracks = db.query(JobRole).count()
@@ -910,7 +910,7 @@ def get_dashboard(db: Session) -> DashboardData:
 
 
 def get_costs(db: Session) -> CostDashboardData:
-    now = datetime.now()
+    now = datetime.now(UTC).replace(tzinfo=None)
     since = now - timedelta(days=30)
     rows = (
         db.query(AiUsageLog)

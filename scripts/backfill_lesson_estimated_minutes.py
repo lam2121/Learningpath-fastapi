@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Backfill lesson.estimated_minutes from saved theory/quiz content."""
 #python3 scripts/backfill_lesson_estimated_minutes.py
 from app.core.database import SessionLocal

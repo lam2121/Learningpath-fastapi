@@ -6,22 +6,22 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
+from app.core.ai.gemini import GeminiClientPool
+from app.core.ai.prompts import PROMPT_E1_TEMPLATE
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.core.roadmap import lesson_is_assigned
-from app.core.security import get_password_hash, verify_password, create_access_token
+from app.core.security import create_access_token, get_password_hash, verify_password
 from app.feature.auth.auth_schema import (
+    AICoachMessageRequest,
+    AICoachMessageResponse,
     LessonQuizHistoryEntryResponse,
     LoginResponse,
     StudySettingsUpdateRequest,
     UserCreate,
     UserProfileResponse,
     UserResponse,
-    AICoachMessageRequest,
-    AICoachMessageResponse,
 )
-from app.core.ai.gemini import GeminiClientPool
-from app.core.ai.prompts import PROMPT_E1_TEMPLATE
 from app.feature.onboarding.lesson_quiz_scoring import LESSON_PASS_THRESHOLD_PERCENT
 from app.models.lesson import Lesson
 from app.models.topic import Topic
@@ -547,7 +547,7 @@ async def generate_ai_coach_message(
         import json
         result = json.loads(response.text)
         return AICoachMessageResponse(feedback_summary=result.get("feedback_summary", "Keep up the great work!"))
-    except Exception as e:
+    except Exception:
         # Fallback message in case of LLM failure
         return AICoachMessageResponse(feedback_summary="Keep up the good work! Consistent practice is the key to mastering IT English.")
     finally:

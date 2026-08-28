@@ -1,5 +1,6 @@
 from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, text
 from sqlalchemy.dialects.mysql import BIGINT
+
 from app.core.database import Base
 
 # Learner enrollment states (user.learning_status, docs/07 deviation #23).

@@ -1,6 +1,8 @@
-from sqlalchemy import Column, String, Date, DateTime, Integer, ForeignKey, Index, text
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Index, Integer, String, text
 from sqlalchemy.dialects.mysql import BIGINT
+
 from app.core.database import Base
+
 
 class Queue(Base):
     __tablename__ = 'queue'

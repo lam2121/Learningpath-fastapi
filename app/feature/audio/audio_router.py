@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 
 from app.feature.audio.audio_schema import (
     STTResponse,
@@ -13,7 +13,6 @@ from app.feature.audio.stt_service import process_speech_to_text
 from app.feature.audio.tts_service import (
     DEFAULT_VOICE,
     get_voice_list,
-    stream_audio_chunks,
     synthesize_to_file,
 )
 

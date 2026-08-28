@@ -1,5 +1,6 @@
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import declarative_base, sessionmaker
+
 from app.core.config import app_config
 
 # Khởi tạo Engine với các thông số Pool lấy từ AppConfig

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.ai.gemini import GeminiClientPool
+from app.core.ai.prompts import (
+    PROMPT_D1_TEMPLATE,
+    PROMPT_D2_TEMPLATE,
+    PROMPT_D3_TEMPLATE,
+)
 from app.feature.onboarding.lesson_quiz_scoring import (
     LESSON_PASS_THRESHOLD_PERCENT,
     compute_lesson_score_percent,
@@ -17,12 +23,6 @@ from app.models.lesson import Lesson
 from app.models.topic import Topic
 from app.models.user_lesson import UserLesson
 from app.models.user_radar_score import UserRadarScore
-from app.core.ai.gemini import GeminiClientPool
-from app.core.ai.prompts import (
-    PROMPT_D1_TEMPLATE,
-    PROMPT_D2_TEMPLATE,
-    PROMPT_D3_TEMPLATE,
-)
 
 QUESTION_TYPE_KEYS = {
     "fill_blank": "fill",
@@ -30,6 +30,15 @@ QUESTION_TYPE_KEYS = {
     "ordering": "order",
 }
 SKILL_KEYS = ("D_doc", "C_comm", "T_trouble", "G_custom")
+
+
+def _parse_iso_datetime(value: object | None) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def get_lesson_quiz_state(db: Session, user_id: int, lesson: Lesson) -> dict[str, Any]:
@@ -186,7 +195,7 @@ def submit_lesson_quiz(
         "question_order": question_order,
         "answers": normalized_answers,
         "question_results": question_results,
-        "submitted_at": datetime.utcnow().isoformat(),
+        "submitted_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
         "weighted_score_percent": weighted_score_percent,
         "correct_no_hint_count": correct_no_hint_count,
         "correct_with_hint_count": correct_with_hint_count,
@@ -203,7 +212,7 @@ def submit_lesson_quiz(
 
     first_pass_radar_applied = False
     if current_attempt_passed and user_lesson.completed_at is None:
-        user_lesson.completed_at = datetime.utcnow()
+        user_lesson.completed_at = datetime.now(UTC).replace(tzinfo=None)
         user_lesson.status = "completed"
         first_pass_radar_applied = _apply_first_pass_radar_update(
             db,
@@ -215,7 +224,7 @@ def submit_lesson_quiz(
         user_lesson.status = "in_progress"
 
     if user_lesson.unlocked_at is None:
-        user_lesson.unlocked_at = datetime.utcnow()
+        user_lesson.unlocked_at = datetime.now(UTC).replace(tzinfo=None)
 
     user_lesson.user_answers = saved_state
     db.commit()
@@ -660,11 +669,10 @@ async def evaluate_user_answer(
             text = text[7:]
         elif text.startswith("```"):
             text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
+        text = text.removesuffix("```")
         text = text.strip()
         
         data = json.loads(text)
         return data.get("feedback_summary", "Good effort! Keep practicing.")
-    except Exception as e:
+    except Exception:
         return "Great effort! (AI evaluation unavailable at the moment)"

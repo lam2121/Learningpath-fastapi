@@ -1,6 +1,8 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Index, text
+from sqlalchemy import Column, DateTime, ForeignKey, Index, String, text
 from sqlalchemy.dialects.mysql import BIGINT
+
 from app.core.database import Base
+
 
 class Course(Base):
     __tablename__ = 'course'

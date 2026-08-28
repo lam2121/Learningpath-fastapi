@@ -9,6 +9,12 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_user_optional, get_user_from_access_token
 from app.core.notification_stream import notification_stream_broker
 from app.core.roadmap import lesson_is_assigned
+from app.feature.onboarding.lesson_quiz_service import (
+    evaluate_user_answer,
+    get_lesson_quiz_result_detail,
+    get_lesson_quiz_state,
+    submit_lesson_quiz,
+)
 from app.feature.onboarding.placement_test_schema import (
     CompletePlacementTestRequest,
     CompletePlacementTestResponse,
@@ -25,13 +31,9 @@ from app.feature.onboarding.placement_test_service import (
     lesson_is_unlocked_for_user,
     recompute_roadmap,
 )
-from app.feature.onboarding.lesson_quiz_service import (
-    get_lesson_quiz_result_detail,
-    get_lesson_quiz_state,
-    submit_lesson_quiz,
-    evaluate_user_answer,
-)
 from app.feature.onboarding.roadmap_schema import (
+    EvaluateAnswerRequest,
+    EvaluateAnswerResponse,
     LessonGenerateResponse,
     LessonQuizResultDetailResponse,
     LessonQuizStateResponse,
@@ -39,8 +41,6 @@ from app.feature.onboarding.roadmap_schema import (
     LessonQuizSubmitResponse,
     RoadmapResponse,
     RoadmapSelectRequest,
-    EvaluateAnswerRequest,
-    EvaluateAnswerResponse,
 )
 from app.models.job_role import JobRole
 from app.models.lesson import Lesson
@@ -392,8 +392,8 @@ async def generate_roadmap_lesson(
             message="Lesson already generated and ready to study",
         )
 
-    from app.feature.admin import admin_service
     from app.core.ai.generation import generate_lesson_content
+    from app.feature.admin import admin_service
 
     info = admin_service.kickoff_lesson_generation(db, lesson_id, force=force)
     background_tasks.add_task(generate_lesson_content, lesson_id, force=force)

@@ -31,7 +31,7 @@ AI_GENERATION_ENABLED_KEY = "ai_generation_enabled"
 RATE_LIMIT_RPM = 250
 MIN_INTERVAL_SECONDS = 60.0 / RATE_LIMIT_RPM
 
-REQUEST_TIMEOUT_SECONDS = 90.0
+REQUEST_TIMEOUT_SECONDS = 150.0
 
 # Backoff config for 429/quota errors
 QUOTA_BACKOFF_MIN = 1.0
@@ -196,7 +196,7 @@ def _load_providers() -> list[ProviderConfig]:
             "groq",
             "https://api.groq.com/openai/v1",
             app_config.Groq,
-            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
         ),
         (
             "openrouter",

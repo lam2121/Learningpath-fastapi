@@ -1,10 +1,9 @@
 import asyncio
 import json
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import Cookie, APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-
 from app.core.database import get_db
 from app.core.dependencies import get_current_user_optional, get_user_from_access_token
 from app.core.notification_stream import notification_stream_broker
@@ -204,16 +203,14 @@ def get_placement_test_result_endpoint(
 
 
 def _resolve_user_id(db: Session, current_user: User | None) -> int:
-    """Resolve user_id from the session, mirroring the POST/GET fallback."""
-    if current_user:
-        return current_user.id
-    fallback_user = db.query(User).first()
-    if not fallback_user:
+    """Resolve user_id from current_user, strictly requiring authentication."""
+    if not current_user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="No authenticated user and no fallback user in the database",
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    return fallback_user.id
+    return current_user.id
 
 
 def _get_owned_assigned_lesson(db: Session, user_id: int, lesson_id: int) -> Lesson:
@@ -297,15 +294,25 @@ def get_roadmap(
 
 @router.get("/roadmap/notifications/stream", status_code=status.HTTP_200_OK)
 async def stream_roadmap_notifications(
-    token: str = Query(..., min_length=1),
+    access_token: str | None = Cookie(default=None),
     db: Session = Depends(get_db),
 ):
+    if not access_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication is required for the notification stream.",
+        )
+    
+    # Clean up token format if it includes the "Bearer " prefix
+    token = access_token.replace("Bearer ", "") if access_token.startswith("Bearer ") else access_token
+
     user = get_user_from_access_token(token, db)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication is required for the notification stream.",
         )
+        
     user_id = int(user.id)
     db.close()
 
@@ -323,6 +330,8 @@ async def stream_roadmap_notifications(
                 try:
                     payload = await asyncio.wait_for(queue.get(), timeout=25)
                     yield _format_sse("roadmap_updated", payload)
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
                 except TimeoutError:
                     yield ": keep-alive\n\n"
         finally:

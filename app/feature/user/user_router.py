@@ -3,7 +3,6 @@ from datetime import date, datetime, timedelta
 from math import ceil
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.core.ai.gemini import GeminiClientPool
@@ -11,18 +10,16 @@ from app.core.ai.prompts import PROMPT_E1_TEMPLATE
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.core.roadmap import lesson_is_assigned
-from app.core.security import create_access_token, get_password_hash, verify_password
-from app.feature.auth.auth_schema import (
+from app.core.ai.gemini import GeminiClientPool
+from app.core.ai.prompts import PROMPT_E1_TEMPLATE
+from app.feature.onboarding.lesson_quiz_scoring import LESSON_PASS_THRESHOLD_PERCENT
+from app.feature.user.user_schema import (
     AICoachMessageRequest,
     AICoachMessageResponse,
     LessonQuizHistoryEntryResponse,
-    LoginResponse,
     StudySettingsUpdateRequest,
-    UserCreate,
     UserProfileResponse,
-    UserResponse,
 )
-from app.feature.onboarding.lesson_quiz_scoring import LESSON_PASS_THRESHOLD_PERCENT
 from app.models.lesson import Lesson
 from app.models.topic import Topic
 from app.models.user import LEARNING_NONE, User
@@ -440,68 +437,10 @@ def _reset_user_career_track(db: Session, user: User) -> None:
         ) from exc
 
 
-@router.post(
-    "/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED
-)
-def register(user_in: UserCreate, db: Session = Depends(get_db)):
-    # 1. Kiểm tra xem email đã tồn tại trong Database chưa
-    user_exists = db.query(User).filter(User.email == user_in.email).first()
-    if user_exists:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Email đã được đăng ký."
-        )
-
-    # 2. Băm mật khẩu và tạo bản ghi mới
-    hashed_pwd = get_password_hash(user_in.password)
-    new_user = User(email=user_in.email, name=user_in.name, hashed_password=hashed_pwd, role_id=1)
-
-    # 3. Lưu xuống Database
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-
-    return new_user
-
-
-# Đã thay đổi UserLogin thành OAuth2PasswordRequestForm
-@router.post("/login", response_model=LoginResponse)
-def login(
-    form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)
-):
-    # 1. Tìm user theo email
-    # Swagger sẽ gửi email vào trường form_data.username
-    user = db.query(User).filter(
-        (User.email == form_data.username) | (User.name == form_data.username)
-    ).first()
-
-    # 2. Kiểm tra user có tồn tại và mật khẩu có khớp không
-    if not user or not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Email hoặc mật khẩu không chính xác.",
-        )
-
-    # 3. Nếu đúng, tạo JWT Token chứa user_id (sub)
-    access_token = create_access_token(data={"sub": str(user.id)})
-
-    return LoginResponse(
-        access_token=access_token,
-        token_type="bearer",
-        user_id=user.id,
-        email=user.email,
-        name=user.name,
-        role_id=user.role_id,
-    )
-
-
 @router.get("/me", response_model=UserProfileResponse)
 def get_user_profile(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    """
-    API này yêu cầu phải có Token hợp lệ.
-    Nếu Token đúng, nó sẽ trả về thông tin của chính user đó.
-    """
     return _build_user_profile_response(db, current_user)
 
 
@@ -532,6 +471,7 @@ async def generate_ai_coach_message(
     payload: AICoachMessageRequest,
     current_user: User = Depends(get_current_user),
 ):
+    _ = current_user
     prompt = PROMPT_E1_TEMPLATE.format(
         day_streak=payload.day_streak,
         lesson_learner=payload.lesson_learner,
@@ -539,16 +479,21 @@ async def generate_ai_coach_message(
         accuracy=payload.accuracy,
         daily_study_per_day=payload.daily_study_per_day,
     )
-    
+
     client = GeminiClientPool()
     try:
         response = await client.generate_json(prompt)
-        # GeminiClientPool returns an LLMResponse which has 'text' as the json string
-        import json
         result = json.loads(response.text)
-        return AICoachMessageResponse(feedback_summary=result.get("feedback_summary", "Keep up the great work!"))
+        return AICoachMessageResponse(
+            feedback_summary=result.get("feedback_summary", "Keep up the great work!")
+        )
     except Exception:
-        # Fallback message in case of LLM failure
-        return AICoachMessageResponse(feedback_summary="Keep up the good work! Consistent practice is the key to mastering IT English.")
+        return AICoachMessageResponse(
+            feedback_summary=(
+                "Keep up the good work! Consistent practice is the key to "
+                "mastering IT English."
+            )
+        )
     finally:
         await client.close()
+

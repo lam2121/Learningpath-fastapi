@@ -1,5 +1,6 @@
+from typing import Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -7,80 +8,118 @@ from sqlalchemy.orm import Session
 from app.core.config import app_config
 from app.core.database import get_db
 from app.models.user import User
+ 
+# CareerPath consumes bearer tokens issued by the external auth-service.
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl=app_config.AUTH_TOKEN_URL,
+    auto_error=False,
+)
 
-# Khai báo cấu hình OAuth2
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
+
+def _credentials_exception() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Không thể xác thực thông tin (Token không hợp lệ hoặc đã hết hạn)",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _normalize_role_id(role_name: object) -> int:
+    normalized = str(role_name or "employee").strip().lower()
+    if normalized == "admin":
+        return 2
+    if normalized in {"employee", "guest"}:
+        return 1
+    raise _credentials_exception()
+
+
+def _decode_auth_service_access_token(token: str) -> dict:
+    try:
+        payload = jwt.decode(
+            token,
+            app_config.SECRET_KEY,
+            algorithms=[app_config.ALGORITHM],
+            issuer=app_config.AUTH_TOKEN_ISSUER,
+            audience=app_config.AUTH_TOKEN_AUDIENCE,
+        )
+    except JWTError as exc:
+        raise _credentials_exception() from exc
+
+    if payload.get("token_type") != "access":
+        raise _credentials_exception()
+
+    return payload
 
 
 def _get_or_provision_user(payload: dict, db: Session) -> User:
-    """
-    Tìm user trong toeic_learningpath hoặc tự động tạo mới (Auto-Provisioning)
-    ngay khi người dùng từ Auth Service đăng nhập/truy cập CareerPath lần đầu.
-    """
-    user_id = payload.get("user_id") or payload.get("sub") or payload.get("id")
-    email = payload.get("email")
- 
-    if not user_id and not email:
+    """Provision or update the local app profile from trusted auth-service claims."""
+    user_id = payload.get("user_id") or payload.get("sub")
+    email = str(payload.get("email") or "").strip().lower()
+
+    if not user_id or not email:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token không chứa định danh người dùng.",
+            detail="Token không chứa đầy đủ định danh người dùng.",
             headers={"WWW-Authenticate": "Bearer"},
         )
- 
+
     try:
-        user_id_int = int(user_id) if user_id else None
-    except (ValueError, TypeError):
-        user_id_int = None
- 
-    # 1. Tìm theo Email (chuẩn xác nhất)
-    user = None
-    if email:
-        user = db.query(User).filter(User.email == email.strip().lower()).first()
- 
-    # 2. Tìm theo ID nếu chưa tìm thấy bằng email
-    if user is None and user_id_int is not None:
-        user = db.query(User).filter(User.id == user_id_int).first()
- 
-    # 3. TỰ ĐỘNG TẠO PROFILE trong toeic_learningpath.user nếu chưa có
+        user_id_int = int(user_id)
+    except (ValueError, TypeError) as exc:
+        raise _credentials_exception() from exc
+
+    role_id = _normalize_role_id(payload.get("role"))
+    display_name = str(
+        payload.get("name") or payload.get("full_name") or email.split("@")[0]
+    ).strip()
+    if not display_name:
+        raise _credentials_exception()
+
+    user_by_id = db.query(User).filter(User.id == user_id_int).first()
+    user_by_email = db.query(User).filter(User.email == email).first()
+
+    if (
+        user_by_id is not None
+        and user_by_email is not None
+        and user_by_id.id != user_by_email.id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="CareerPath user mapping conflict for authenticated identity.",
+        )
+
+    user = user_by_id or user_by_email
+
     if user is None:
-        role_name = str(payload.get("role", "employee")).lower()
-        role_id = 2 if role_name in ("admin", "administrator") else 1
-        name = payload.get("name") or payload.get("full_name") or payload.get("sub") or (email.split("@")[0] if email else f"User {user_id}")
-        user_email = email.strip().lower() if email else f"user_{user_id}@example.com"
- 
-        insert_id = None
-        if user_id_int is not None:
-            existing = db.query(User).filter(User.id == user_id_int).first()
-            if not existing:
-                insert_id = user_id_int
- 
         user = User(
-            id=insert_id,
-            name=name,
-            email=user_email,
+            id=user_id_int,
+            name=display_name,
+            email=email,
             role_id=role_id,
             hashed_password="",
             learning_status="none",
             daily_study_minutes=120,
         )
-        try:
-            db.add(user)
-            db.commit()
-            db.refresh(user)
-        except Exception:
-            db.rollback()
-            user = User(
-                name=name,
-                email=user_email,
-                role_id=role_id,
-                hashed_password="",
-                learning_status="none",
-                daily_study_minutes=120,
-            )
-            db.add(user)
-            db.commit()
-            db.refresh(user)
- 
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        return user
+
+    needs_update = False
+    if user.email != email:
+        user.email = email
+        needs_update = True
+    if user.role_id != role_id:
+        user.role_id = role_id
+        needs_update = True
+    if not user.name or user.name != display_name:
+        user.name = display_name
+        needs_update = True
+    if needs_update:
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
     return user
 
 
@@ -93,51 +132,51 @@ def get_user_from_access_token(token: str | None, db: Session) -> User | None:
     if not token:
         return None
     try:
-        payload = jwt.decode(
-            token, app_config.SECRET_KEY,
-            algorithms=["HS256"], options={"verify_aud": False},
-        )
-    except JWTError:
-        return None
-    return _get_or_provision_user(payload, db)
+        payload = _decode_auth_service_access_token(token)
+        return _get_or_provision_user(payload, db)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            return None
+        raise
 
+def get_token_from_request(request: Request, *, required: bool = True) -> str | None:
+    token = request.cookies.get("access_token")
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
-    credentials_exception = HTTPException(
+    if not token:
+        authorization = request.headers.get("Authorization")
+        if authorization and authorization.startswith("Bearer "):
+            token = authorization.split(" ", 1)[1]
+
+    if token or not required:
+        return token
+
+    raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Không thể xác thực thông tin (Token không hợp lệ hoặc đã hết hạn)",
+        detail="Không tìm thấy token xác thực",
         headers={"WWW-Authenticate": "Bearer"},
     )
- 
+
+
+def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
+    token = get_token_from_request(request)
     if not token:
-        raise credentials_exception
- 
-    try:
-        # Giải mã Token bằng SECRET_KEY dùng chung (HS256)
-        payload = jwt.decode(
-            token,
-            app_config.SECRET_KEY,
-            algorithms=["HS256"],
-            options={"verify_aud": False},
-        )
-    except JWTError:
-        raise credentials_exception
- 
+        raise _credentials_exception()
+
+    payload = _decode_auth_service_access_token(token)
     return _get_or_provision_user(payload, db)
- 
- 
+
+
 def get_current_user_optional(
-    token: str | None = Depends(oauth2_scheme), db: Session = Depends(get_db)
-) -> User | None:
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    token = get_token_from_request(request, required=False)
     if not token:
         return None
     try:
-        payload = jwt.decode(
-            token,
-            app_config.SECRET_KEY,
-            algorithms=["HS256"],
-            options={"verify_aud": False},
-        )
+        payload = _decode_auth_service_access_token(token)
         return _get_or_provision_user(payload, db)
-    except Exception:
-        return None
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            return None
+        raise

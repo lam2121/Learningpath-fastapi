@@ -16,3 +16,4 @@ httpx==0.28.1   # Direct dependency of app/core/ai/gemini.py (multi-provider poo
 ruff
 edge-tts
 aiofiles
+slowapi

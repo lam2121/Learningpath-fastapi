@@ -33,10 +33,15 @@ MIN_INTERVAL_SECONDS = 60.0 / RATE_LIMIT_RPM
 
 REQUEST_TIMEOUT_SECONDS = 150.0
 
-# Backoff config for 429/quota errors
-QUOTA_BACKOFF_MIN = 1.0
-QUOTA_BACKOFF_MAX = 10.0
-PROVIDER_COOLDOWN_SECONDS = 20.0
+# Backoff config for 429/quota errors. Free-tier providers (esp. groq's
+# gpt-oss-120b) enforce tokens-per-minute quotas on a ~60s rolling window: a
+# single Generator-A block (~2900 output tokens) drains a large share of the
+# budget, so a short 20s cooldown lets the NEXT attempt hit the same 429 before
+# the window resets and the provider is skipped. Bumping the cooldown to ~65s
+# lets the TPM window clear so a retried attempt can actually succeed.
+QUOTA_BACKOFF_MIN = 5.0
+QUOTA_BACKOFF_MAX = 20.0
+PROVIDER_COOLDOWN_SECONDS = 65.0
 
 SYSTEM_PROMPT = (
     "You are an expert ESL (English for IT) content generator. "
@@ -189,24 +194,26 @@ def _load_providers() -> list[ProviderConfig]:
     Order = preference order (primary first). Only keys that are present and
     were verified during testing are included. Google's OpenAI-compatible
     endpoint is used for Gemini so a single client code path works everywhere.
+
+    The pool is shared by all generators:
+    - A (Placement) & B (Course Outline): use first 4 fast models (2048 tokens)
+    - C1 (Theory, 8192 tokens) & C2 (Quiz, 4096 tokens): naturally reach the
+      high-capacity models (mistral-medium, gemini-2.5-flash) later in the list
     """
-    # Preference order: fast high-yield free providers first, then reliable
-    # paid/alt fallback, then a last-resort free model. groq gpt-oss-120b is the
-    # default primary (fast + schema-correct after the escaped-JSON parser fix);
-    # mistral-large-latest is the reliable fallback (verified to be the only
-    # generator consistently returning valid output); openrouter free is a
-    # last-resort when both are down.
-    #
-    # NOTE: nvidia was deliberately removed below — the configured model
-    # (meta/llama-3.1-8b-instruct) is EOL (HTTP 410) and every live chat model
-    # on this key is either unprovisioned (HTTP 404) or times out, so it only
-    # added guaranteed-failure latency as the terminal provider in the chain.
     candidates = [
+        # --- Generator A (Placement) & B (Course Outline) ---
+        # Fast, low-token models. 2048 max tokens default.
         (
             "groq",
             "https://api.groq.com/openai/v1",
             app_config.Groq,
             "openai/gpt-oss-120b",
+        ),
+        (
+            "groq",
+            "https://api.groq.com/openai/v1",
+            app_config.Groq,
+            "openai/gpt-oss-20b",
         ),
         (
             "mistral",
@@ -220,6 +227,22 @@ def _load_providers() -> list[ProviderConfig]:
             app_config.OpenRouter,
             "google/gemma-4-31b-it:free",
         ),
+        # --- Generator C1 (Theory) & C2 (Quiz) ---
+        # High-token models (8192/4096). Added after fast models so A/B use cheap
+        # models first; C1/C2 calls will naturally reach these when needed.
+        (
+            "mistral",
+            "https://api.mistral.ai/v1",
+            app_config.Mistral,
+            "mistral-medium",
+        ),
+        (
+            "openrouter",
+            "https://openrouter.ai/api/v1",
+            app_config.OpenRouter,
+            "google/gemini-2.5-flash",
+        ),
+        # --- Last resort ---
         (
             "huggingface",
             "https://router.huggingface.co/v1",

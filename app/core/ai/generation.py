@@ -67,6 +67,12 @@ QUIZ_TYPE_ID = 1  # quiz_type: 'multiple choice'
 MAX_ATTEMPTS = 3  # original + max 2 retries (spec §8.1)
 LETTER_TO_INDEX = {"A": 0, "B": 1, "C": 2, "D": 3}
 
+# Generator A (Placement) output budget. A skill block is 12 questions x 6 long
+# fields; a full block measures ~2900 completion tokens, which exceeds the
+# generate_json default (2048) — without this the pool truncates the output and
+# the validator sees "Expected 12 questions, got 1". Match spec §8.2 (4096).
+MAX_PLACEMENT_OUTPUT_TOKENS = 4096
+
 # Serializes background generation per role so concurrent clicks can never
 # interleave deletes/inserts and multiply the question pool.
 _role_locks: dict[int, asyncio.Lock] = {}
@@ -426,7 +432,10 @@ async def _generate_skill_block(
     for attempt in range(MAX_ATTEMPTS):
         call_prompt = prompt if attempt == 0 else retry_prompt_a(prompt, last_error)
         try:
-            response: LLMResponse = await client.generate_json(call_prompt)
+            response: LLMResponse = await client.generate_json(
+                call_prompt,
+                max_output_tokens=MAX_PLACEMENT_OUTPUT_TOKENS,
+            )
         except GenerationError as exc:
             last_error = f"Provider error: {exc}"
             usage_logs.append(

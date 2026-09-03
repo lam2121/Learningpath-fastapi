@@ -5,6 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import app_config
+from app.core.notification_stream import notification_stream_broker
 from app.core.roadmap import (
     SKILLS,
     assigned_lessons,
@@ -594,6 +595,13 @@ def _build_and_save_roadmap(
             UserRoadmap(user_id=user_id, topic_id=topic.id, sort_order=i, track=track)
         )
     db.commit()
+    notification_stream_broker.publish_nowait(
+        user_id,
+        {
+            "type": "roadmap_updated",
+            "reason": "roadmap_changed",
+        },
+    )
 
 
 def build_and_save_roadmap(db: Session, user_id: int) -> None:

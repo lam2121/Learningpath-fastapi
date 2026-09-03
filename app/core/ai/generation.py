@@ -49,6 +49,7 @@ from app.core.ai.validators import (
 )
 from app.core.config import app_config
 from app.core.database import SessionLocal
+from app.core.notification_stream import notification_stream_broker
 from app.models.ai_usage_log import AiUsageLog
 from app.models.generation import RoleGeneration
 from app.models.job_role import JobRole
@@ -57,6 +58,7 @@ from app.models.placement_test_question import PlacementTestQuestion
 from app.models.rejected_content import RejectedContent
 from app.models.topic import Topic
 from app.models.user import LEARNING_ENROLLED, User
+from app.models.user_roadmap import UserRoadmap
 
 logger = logging.getLogger(__name__)
 
@@ -1413,6 +1415,23 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
             lesson.estimated_minutes = estimate_lesson_duration(theory, quiz)
             lesson.is_generated = True
             db.commit()
+
+            assigned_user_ids = [
+                int(row.user_id)
+                for row in db.query(UserRoadmap.user_id)
+                .filter(UserRoadmap.topic_id == lesson.topic_id)
+                .distinct()
+                .all()
+            ]
+            await notification_stream_broker.publish_many(
+                assigned_user_ids,
+                {
+                    "type": "roadmap_updated",
+                    "reason": "lesson_generated",
+                    "lesson_id": int(lesson_id),
+                    "topic_id": int(lesson.topic_id),
+                },
+            )
 
             logger.info(
                 "Generator C finished for lesson %s (role %s)", lesson_id, role_id

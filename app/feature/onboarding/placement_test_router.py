@@ -1,8 +1,12 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session
+import asyncio
+import json
 
+from fastapi import Cookie, APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.core.dependencies import get_current_user_optional
+from app.core.dependencies import get_current_user_optional, get_user_from_access_token
+from app.core.notification_stream import notification_stream_broker
 from app.core.roadmap import lesson_is_assigned
 from app.feature.onboarding.placement_test_schema import (
     CompletePlacementTestRequest,
@@ -43,6 +47,10 @@ from app.models.user import User
 from app.models.user_roadmap import UserRoadmap
 
 router = APIRouter()
+
+
+def _format_sse(event: str, payload: dict[str, object]) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
 
 
 def _schedule_first_topic_lessons(
@@ -195,16 +203,14 @@ def get_placement_test_result_endpoint(
 
 
 def _resolve_user_id(db: Session, current_user: User | None) -> int:
-    """Resolve user_id from the session, mirroring the POST/GET fallback."""
-    if current_user:
-        return current_user.id
-    fallback_user = db.query(User).first()
-    if not fallback_user:
+    """Resolve user_id from current_user, strictly requiring authentication."""
+    if not current_user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="No authenticated user and no fallback user in the database",
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    return fallback_user.id
+    return current_user.id
 
 
 def _get_owned_assigned_lesson(db: Session, user_id: int, lesson_id: int) -> Lesson:
@@ -284,6 +290,62 @@ def get_roadmap(
     roadmap = get_user_roadmap(db, user_id)
     _schedule_first_topic_lessons(background_tasks, db, user_id)
     return roadmap
+
+
+@router.get("/roadmap/notifications/stream", status_code=status.HTTP_200_OK)
+async def stream_roadmap_notifications(
+    access_token: str | None = Cookie(default=None),
+    db: Session = Depends(get_db),
+):
+    if not access_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication is required for the notification stream.",
+        )
+    
+    # Clean up token format if it includes the "Bearer " prefix
+    token = access_token.replace("Bearer ", "") if access_token.startswith("Bearer ") else access_token
+
+    user = get_user_from_access_token(token, db)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication is required for the notification stream.",
+        )
+        
+    user_id = int(user.id)
+    db.close()
+
+    async def event_stream():
+        queue = await notification_stream_broker.subscribe(user_id)
+        try:
+            yield _format_sse(
+                "connected",
+                {
+                    "type": "connected",
+                    "user_id": user_id,
+                },
+            )
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=25)
+                    yield _format_sse("roadmap_updated", payload)
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+                except TimeoutError:
+                    yield ": keep-alive\n\n"
+        finally:
+            notification_stream_broker.unsubscribe(user_id, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post(

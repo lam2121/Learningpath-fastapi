@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings
 class AppConfig(BaseSettings):
     MYSQL_HOST: str = "localhost"
     MYSQL_USER: str = "root"
-    MYSQL_PASSWORD: str = "12345678x@X"
+    MYSQL_PASSWORD: str = ""
     MYSQL_DB: str = "toeic_learningpath"
     MYSQL_PORT: str = "3306"
 
@@ -19,6 +19,9 @@ class AppConfig(BaseSettings):
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+    AUTH_TOKEN_URL: str = "http://localhost:8001/api/auth/login"
+    AUTH_TOKEN_ISSUER: str = "https://english-practice.tma.com.vn/auth"
+    AUTH_TOKEN_AUDIENCE: str = "careerpath"
 
     GEMINI_API_KEY: str = ""
     GEMINI_FLASH_MODEL: str = "gemini-2.5-flash"

@@ -138,6 +138,13 @@ def _parse_json(text: str):
     except json.JSONDecodeError:
         parsed = _try_literal_eval(cleaned)
     if isinstance(parsed, list):
+        # Unwrap superfluous outer array if model returned [[ [...], ... ]]
+        while (
+            len(parsed) == 1
+            and isinstance(parsed[0], list)
+            and (len(parsed[0]) == 0 or isinstance(parsed[0][0], list))
+        ):
+            parsed = parsed[0]
         return parsed
     if isinstance(parsed, dict):
         preferred = ("questions", "rows", "data", "items", "results", "placement_test")

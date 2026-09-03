@@ -234,7 +234,7 @@ def _load_providers() -> list[ProviderConfig]:
             "mistral",
             "https://api.mistral.ai/v1",
             app_config.Mistral,
-            "mistral-medium",
+            "mistral-large-latest",
         ),
         (
             "openrouter",

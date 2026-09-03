@@ -4,7 +4,7 @@ Role CRUD, Generator A kickoff/status, dashboard, AI costs, rejected content,
 and the kill switch.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
@@ -131,7 +131,9 @@ def _skill_definitions_blob(
     return {
         skill: {
             "description": getattr(skill_definitions, skill).description,
-            "example_questions": list(getattr(skill_definitions, skill).example_questions),
+            "example_questions": list(
+                getattr(skill_definitions, skill).example_questions
+            ),
         }
         for skill in DEFAULT_SKILL_DESCRIPTIONS
     }
@@ -405,14 +407,14 @@ def _mark_stale_generation(db: Session, role_id: int) -> None:
             RoleGeneration.status.in_(["in_progress", "pending"]),
             RoleGeneration.started_at.isnot(None),
             RoleGeneration.started_at
-            < datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=STALE_GENERATION_MINUTES),
+            < datetime.utcnow() - timedelta(minutes=STALE_GENERATION_MINUTES),
         )
         .all()
     )
     for gen in stale:
         gen.status = "failed"
         gen.error_message = "Marked failed: generation did not finish within timeout"
-        gen.finished_at = datetime.now(UTC).replace(tzinfo=None)
+        gen.finished_at = datetime.utcnow()
     if stale:
         db.commit()
 
@@ -480,7 +482,7 @@ def kickoff_generation(db: Session, role_id: int, force: bool = False) -> dict:
             role_id=role_id,
             status="in_progress",
             step="a",
-            started_at=datetime.now(UTC).replace(tzinfo=None),
+            started_at=datetime.utcnow(),
         )
     )
     db.commit()
@@ -488,7 +490,9 @@ def kickoff_generation(db: Session, role_id: int, force: bool = False) -> dict:
     return {"message": "Placement generation started", "roleId": role_id}
 
 
-def kickoff_course_generation(db: Session, role_id: int, force: bool = False) -> dict:
+def kickoff_course_generation(
+    db: Session, role_id: int, force: bool = False, resume: bool = False
+) -> dict:
     """Start a B1+B2 course-outline generation (20 topics + 120 lesson shells).
 
     Guard rails mirror Generator A, including a **reset-learners gate** (docs/07
@@ -496,7 +500,17 @@ def kickoff_course_generation(db: Session, role_id: int, force: bool = False) ->
     (FK CASCADE), so regenerating it would silently replace their roadmap rows and
     destroy any lazily-generated lesson content. The admin must reset learners
     (clears placement answers + roadmap + enrollment) before regenerating.
+
+    `resume=true` picks up a failed/partial run (docs/07 deviation #28): existing
+    topics are kept, B-1 is skipped, and the background job regenerates only the
+    lesson shells still missing. It is the non-destructive complement to `force`
+    (which wipes and regenerates the whole outline) — the two are mutually exclusive.
     """
+    if force and resume:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="force and resume are mutually exclusive; pass only one.",
+        )
     get_role_or_404(db, role_id)
     if not generation_enabled(db):
         raise HTTPException(
@@ -531,12 +545,13 @@ def kickoff_course_generation(db: Session, role_id: int, force: bool = False) ->
         )
 
     topic_count = db.query(Topic).filter(Topic.role_id == role_id).count()
-    if topic_count > 0 and not force:
+    if topic_count > 0 and not force and not resume:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 f"Role already has {topic_count} topics. Pass force=true to "
-                "regenerate (replaces the existing course outline)."
+                "regenerate (replaces the existing course outline), or resume=true "
+                "to finish a partial run (keeps existing topics)."
             ),
         )
 
@@ -545,8 +560,8 @@ def kickoff_course_generation(db: Session, role_id: int, force: bool = False) ->
         RoleGeneration(
             role_id=role_id,
             status="in_progress",
-            step="b1",
-            started_at=datetime.now(UTC).replace(tzinfo=None),
+            step="b2" if resume else "b1",
+            started_at=datetime.utcnow(),
         )
     )
     db.commit()
@@ -872,7 +887,7 @@ def preview_generation(
 
 
 def get_dashboard(db: Session) -> DashboardData:
-    now = datetime.now(UTC).replace(tzinfo=None)
+    now = datetime.now()
     since = now - timedelta(days=30)
 
     total_tracks = db.query(JobRole).count()
@@ -910,7 +925,7 @@ def get_dashboard(db: Session) -> DashboardData:
 
 
 def get_costs(db: Session) -> CostDashboardData:
-    now = datetime.now(UTC).replace(tzinfo=None)
+    now = datetime.now()
     since = now - timedelta(days=30)
     rows = (
         db.query(AiUsageLog)
@@ -1074,7 +1089,9 @@ def list_usage_logs(
     limit: int = USAGE_LOG_DEFAULT_LIMIT,
 ) -> list[AiUsageLogResponse]:
     capped = max(1, min(limit, USAGE_LOG_MAX_LIMIT))
-    query = db.query(AiUsageLog).order_by(AiUsageLog.created_at.desc(), AiUsageLog.id.desc())
+    query = db.query(AiUsageLog).order_by(
+        AiUsageLog.created_at.desc(), AiUsageLog.id.desc()
+    )
     if generator and generator != "all":
         query = query.filter(AiUsageLog.generator == generator)
     if status_filter and status_filter != "all":

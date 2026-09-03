@@ -23,6 +23,13 @@ class AppConfig(BaseSettings):
     AUTH_TOKEN_ISSUER: str = "https://english-practice.tma.com.vn/auth"
     AUTH_TOKEN_AUDIENCE: str = "careerpath"
 
+    # The shared HS256 secret that the external auth-service signs JWTs with.
+    # The backend must use the SAME secret to decode those tokens, otherwise
+    # every authenticated request fails and users are never provisioned into
+    # toeic_learningpath.user. This is a document-only reference for the guard
+    # below; override via AUTH_SHARED_SECRET if it ever changes.
+    AUTH_SHARED_SECRET: str = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
+
     GEMINI_API_KEY: str = ""
     GEMINI_FLASH_MODEL: str = "gemini-2.5-flash"
     # Pro model for Generators C-1/C-2 (deep theory + quiz content). Default is

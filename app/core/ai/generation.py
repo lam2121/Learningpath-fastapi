@@ -122,6 +122,21 @@ def _try_literal_eval(text: str):
     return ast.literal_eval(text)
 
 
+def _unescape_json_string(text: str) -> str:
+    """Recover arrays wrapped as an escaped JSON string.
+
+    Several OpenAI-compatible free models (groq gpt-oss, qwen, compound) return
+    the requested array as a literal JSON *string* that double-encodes the inner
+    quotes, e.g. ``[[\\"D_doc\\",\\"Easy\\",...]]`` instead of plain
+    ``[["D_doc","Easy",...]]``. ``json.loads`` of that literal fails with
+    "Expecting value" because of the stray backslashes. Stripping the
+    backslash-quote pairs yields clean, valid JSON.
+    """
+    if '\\"' not in text:
+        return text
+    return text.replace('\\"', '"')
+
+
 def _parse_json(text: str):
     """Parse the raw model output as JSON, tolerating code fences.
 
@@ -129,14 +144,48 @@ def _parse_json(text: str):
     even when an array is requested (e.g. `{"questions": [...]}`). Unwrap the
     first list value found (also one level deeper, for nested wrappers like
     `{"lesson": {"sections": [...]}}`) so the validator sees the array.
+
+    Free OpenAI-compatible models (groq gpt-oss etc.) also double-encode the
+    array as an escaped JSON string, so the quotes are backslash-prefixed.
+    ``_unescape_json_string`` recovers that form (deviation: parser-robustness
+    fix so the fast primary provider's valid output is accepted instead of
+    timing out and rotating to a slow fallback).
     """
     cleaned = text.strip()
     cleaned = _strip_code_fences(cleaned)
     cleaned = _extract_json_start(cleaned)
-    try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError:
-        parsed = _try_literal_eval(cleaned)
+
+    # Candidate parse strategies, most-likely first. `ast.literal_eval` (used by
+    # `_try_literal_eval`) can raise SyntaxError as well as ValueError, so each
+    # attempt is guarded individually; one recovery path failing must never
+    # prevent a later (or the direct) strategy from succeeding.
+    parse_attempts = [
+        json.loads,
+        lambda s: json.loads(_unescape_json_string(s)),
+        _try_literal_eval,
+        lambda s: json.loads(_unescape_json_string(s.strip())),
+    ]
+    parsed = None
+    for strategy in parse_attempts:
+        try:
+            parsed = strategy(cleaned)
+            break
+        except (ValueError, SyntaxError, TypeError):
+            continue
+    if parsed is None:
+        raise ValueError(
+            f"Expected a JSON array, could not parse output "
+            f"({cleaned[:200]!r})"
+        )
+
+    if isinstance(parsed, str):
+        # Double-encoded: the model returned a JSON *string* holding an array.
+        inner = parsed.strip()
+        if inner.startswith(("[[", "[")):
+            try:
+                parsed = json.loads(_unescape_json_string(inner))
+            except (ValueError, SyntaxError, TypeError):
+                pass
     if isinstance(parsed, list):
         return parsed
     if isinstance(parsed, dict):
@@ -229,7 +278,14 @@ def _insert_questions(db: Session, role_id: int, skill: str, rows: list) -> int:
 
 VALID_SKILLS_LIST = ["D_doc", "C_comm", "T_trouble", "G_custom"]
 VALID_TIERS = ["tier_1", "tier_2"]
-EXPECTED_LESSON_TIERS = ["basic", "basic", "intermediate", "intermediate", "advanced", "advanced"]
+EXPECTED_LESSON_TIERS = [
+    "basic",
+    "basic",
+    "intermediate",
+    "intermediate",
+    "advanced",
+    "advanced",
+]
 
 
 def _normalize_topic_outline(rows: list, baseline: dict) -> list:
@@ -249,7 +305,11 @@ def _normalize_topic_outline(rows: list, baseline: dict) -> list:
     if len(rows) < NUM_TOPICS:
         # Too few — rare, but return as-is; validator will report the error
         # and the retry prompt will ask for correction.
-        logger.warning("B1 returned %d topics (expected %d); returning as-is", len(rows), NUM_TOPICS)
+        logger.warning(
+            "B1 returned %d topics (expected %d); returning as-is",
+            len(rows),
+            NUM_TOPICS,
+        )
         return rows
 
     # len(rows) > NUM_TOPICS — trim excess
@@ -277,8 +337,11 @@ def _normalize_topic_outline(rows: list, baseline: dict) -> list:
             break
         # Find indices of topics for this skill (from the end, to preserve early ones)
         skill_indices = [
-            i for i in range(len(trimmed) - 1, -1, -1)
-            if isinstance(trimmed[i], list) and len(trimmed[i]) >= 2 and trimmed[i][1] == skill
+            i
+            for i in range(len(trimmed) - 1, -1, -1)
+            if isinstance(trimmed[i], list)
+            and len(trimmed[i]) >= 2
+            and trimmed[i][1] == skill
         ]
         while skill_indices and excess > 0 and counts[skill] > expected.get(skill, 0):
             idx = skill_indices.pop(0)  # remove from end
@@ -293,8 +356,11 @@ def _normalize_topic_outline(rows: list, baseline: dict) -> list:
             if excess <= 0:
                 break
             skill_indices = [
-                i for i in range(len(trimmed) - 1, -1, -1)
-                if isinstance(trimmed[i], list) and len(trimmed[i]) >= 2 and trimmed[i][1] == skill
+                i
+                for i in range(len(trimmed) - 1, -1, -1)
+                if isinstance(trimmed[i], list)
+                and len(trimmed[i]) >= 2
+                and trimmed[i][1] == skill
             ]
             while skill_indices and excess > 0:
                 idx = skill_indices.pop(0)
@@ -302,7 +368,9 @@ def _normalize_topic_outline(rows: list, baseline: dict) -> list:
                 counts[skill] -= 1
                 excess -= 1
 
-    logger.info("After normalization: %d topics, distribution: %s", len(trimmed), counts)
+    logger.info(
+        "After normalization: %d topics, distribution: %s", len(trimmed), counts
+    )
     return trimmed
 
 
@@ -321,7 +389,9 @@ def _normalize_lesson_shells(rows: list, topic_skill: str) -> list:
         return rows[:NUM_LESSONS]
 
     # len(rows) < NUM_LESSONS — rare, return as-is; validator will report
-    logger.warning("B2 returned %d lessons (expected %d); returning as-is", len(rows), NUM_LESSONS)
+    logger.warning(
+        "B2 returned %d lessons (expected %d); returning as-is", len(rows), NUM_LESSONS
+    )
     return rows
 
 
@@ -826,8 +896,16 @@ def _insert_lesson_shells(db: Session, topic_id: int, rows: list) -> int:
     return len(rows)
 
 
-async def generate_course_for_role(role_id: int) -> dict:
-    """Background job: generate 20 topics + 120 lesson shells for a role (B1+B2)."""
+async def generate_course_for_role(role_id: int, resume: bool = False) -> dict:
+    """Background job: generate 20 topics + 120 lesson shells for a role (B1+B2).
+
+    `resume=True` (docs/07 deviation #28) picks up a failed/partial run without
+    re-rolling the outline: any topics that already exist are kept, Prompt B-1 is
+    skipped, and Prompt B-2 is re-run only for topics that do not yet have their
+    full 6-shell set (partial leftovers from an interrupted run are cleared first).
+    Topics that already carry >= 6 shells are left untouched. If no topics exist,
+    resume degrades to exactly the full B-1+B-2 path.
+    """
     lock = _role_locks.setdefault(role_id, asyncio.Lock())
     async with lock:
         db = SessionLocal()
@@ -909,72 +987,105 @@ async def generate_course_for_role(role_id: int) -> dict:
                 db.commit()
                 return {"status": "failed", "error": gen.error_message}
 
-            # Idempotent: delete the role's existing topics (lessons cascade).
-            try:
-                db.query(Topic).filter(Topic.role_id == role_id).delete()
-                db.commit()
-            except IntegrityError as exc:
-                db.rollback()
-                gen.status = "failed"
-                gen.error_message = f"Cannot regenerate course outline: {exc.orig}"
-                gen.finished_at = datetime.now(timezone.utc)
-                db.commit()
-                return {"status": "failed", "error": gen.error_message}
-
-            # ── B-1: 20 topics ──────────────────────────────────────────────
-            gen.step = "b1"
-            db.commit()
-            (
-                topic_rows,
-                usage_logs,
-                b1_error,
-                b1_raw,
-                b1_checks,
-            ) = await _generate_topic_outline(client, role)
-            for log in usage_logs:
-                _log_usage(
-                    db,
-                    "B1",
-                    role_id,
-                    log["prompt_tokens"],
-                    log["completion_tokens"],
-                    log["status"],
-                    log.get("provider"),
-                    log.get("model"),
-                )
-
-            topics: list[Topic] = []
-            if topic_rows is not None:
-                _insert_topics(db, role_id, topic_rows)
-                db.commit()
-                topics = (
-                    db.query(Topic)
-                    .filter(Topic.role_id == role_id)
-                    .order_by(Topic.sort_order.asc())
-                    .all()
-                )
+            # ── Resume vs full regeneration ─────────────────────────────────
+            # Resume keeps whatever topics already exist (B-1 is NOT re-run) and
+            # only repairs missing lesson shells in the B-2 loop below. A full
+            # run first wipes the role's topics (lessons cascade) and re-runs
+            # B-1 from scratch.
+            existing_topics = (
+                db.query(Topic)
+                .filter(Topic.role_id == role_id)
+                .order_by(Topic.sort_order.asc())
+                .all()
+            )
+            if resume and existing_topics:
+                topics = existing_topics
+                gen.step = "b2"
                 gen.step_b1_count = len(topics)
                 gen.step_b1_errors = 0
+                db.commit()
             else:
-                gen.step_b1_count = 0
-                gen.step_b1_errors = 1
-                _record_rejected(
-                    db,
-                    "B1",
-                    role_id,
-                    f"role={role.name}",
-                    b1_error or "unknown",
+                if existing_topics:
+                    # Idempotent: delete the role's existing topics (lessons cascade).
+                    try:
+                        db.query(Topic).filter(Topic.role_id == role_id).delete()
+                        db.commit()
+                    except IntegrityError as exc:
+                        db.rollback()
+                        gen.status = "failed"
+                        gen.error_message = (
+                            f"Cannot regenerate course outline: {exc.orig}"
+                        )
+                        gen.finished_at = datetime.now(timezone.utc)
+                        db.commit()
+                        return {"status": "failed", "error": gen.error_message}
+
+                # ── B-1: 20 topics ─────────────────────────────────────────
+                gen.step = "b1"
+                db.commit()
+                (
+                    topic_rows,
+                    usage_logs,
+                    b1_error,
                     b1_raw,
                     b1_checks,
-                )
-                _log_usage(db, "B1", role_id, 0, 0, "rejected")
-                db.commit()
+                ) = await _generate_topic_outline(client, role)
+                for log in usage_logs:
+                    _log_usage(
+                        db,
+                        "B1",
+                        role_id,
+                        log["prompt_tokens"],
+                        log["completion_tokens"],
+                        log["status"],
+                        log.get("provider"),
+                        log.get("model"),
+                    )
+
+                topics: list[Topic] = []
+                if topic_rows is not None:
+                    _insert_topics(db, role_id, topic_rows)
+                    db.commit()
+                    topics = (
+                        db.query(Topic)
+                        .filter(Topic.role_id == role_id)
+                        .order_by(Topic.sort_order.asc())
+                        .all()
+                    )
+                    gen.step_b1_count = len(topics)
+                    gen.step_b1_errors = 0
+                else:
+                    gen.step_b1_count = 0
+                    gen.step_b1_errors = 1
+                    _record_rejected(
+                        db,
+                        "B1",
+                        role_id,
+                        f"role={role.name}",
+                        b1_error or "unknown",
+                        b1_raw,
+                        b1_checks,
+                    )
+                    _log_usage(db, "B1", role_id, 0, 0, "rejected")
+                    db.commit()
 
             # ── B-2: 6 lesson shells per topic ──────────────────────────────
             b2_count = 0
             b2_errors = 0
             if topics:
                 for topic in topics:
+                    # Resume: skip topics that already carry a full shell set;
+                    # clear partial leftovers (< 6, from an interrupted run)
+                    # before regenerating.
+                    if resume and existing_topics:
+                        existing_count = (
+                            db.query(Lesson).filter(Lesson.topic_id == topic.id).count()
+                        )
+                        if existing_count >= 6:
+                            b2_count += existing_count
+                            continue
+                        db.query(Lesson).filter(Lesson.topic_id == topic.id).delete()
+                        db.commit()
                     gen.step = "b2"
                     db.commit()
                     (

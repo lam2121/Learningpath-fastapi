@@ -94,11 +94,12 @@ def generate_role_course(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     force: bool = Query(default=False),
+    resume: bool = Query(default=False),
 ):
-    admin_service.kickoff_course_generation(db, role_id, force=force)
+    admin_service.kickoff_course_generation(db, role_id, force=force, resume=resume)
     from app.core.ai.generation import generate_course_for_role
 
-    background_tasks.add_task(generate_course_for_role, role_id)
+    background_tasks.add_task(generate_course_for_role, role_id, resume=resume)
     return GenerateResponse(
         message="Course generation started (B1 topics -> B2 lesson shells)",
         roleId=role_id,

@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -10,13 +10,39 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from app.api_router import api_router
+from app.core.config import app_config
 from app.core.notification_stream import notification_stream_broker
 from app.feature.audio.tts_service import clean_audio_cache
+
+
+def _check_shared_jwt_secret() -> None:
+    """Warn loudly (but do not crash) if SECRET_KEY diverges from the external
+    auth-service's signing secret. A mismatch makes every authenticated request
+    fail with 401 and prevents users from being provisioned into
+    toeic_learningpath.user — a silent, hard-to-debug login failure."""
+    if (
+        app_config.AUTH_SHARED_SECRET
+        and app_config.SECRET_KEY
+        and app_config.SECRET_KEY != app_config.AUTH_SHARED_SECRET
+    ):
+        print(
+            "\n"
+            "*******************************************************************\n"
+            "WARNING: careerpath-fastapi SECRET_KEY does NOT match the shared\n"
+            "auth-service JWT secret. Login will fail (401) and users will NOT\n"
+            "be provisioned into toeic_learningpath.user.\n"
+            f"  .env SECRET_KEY                = {app_config.SECRET_KEY!r}\n"
+            f"  auth-service JWT_SECRET_KEY    = {app_config.AUTH_SHARED_SECRET!r}\n"
+            "Set careerpath-fastapi/.env SECRET_KEY to the auth-service secret.\n"
+            "*******************************************************************\n"
+        )
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Startup / shutdown lifecycle hook."""
+    # Warn at startup if the shared JWT secret diverges (auth provisioning guard)
+    _check_shared_jwt_secret()
     # Clean stale audio cache on boot
     clean_audio_cache()
     notification_stream_broker.attach_loop()

@@ -190,31 +190,35 @@ def _load_providers() -> list[ProviderConfig]:
     were verified during testing are included. Google's OpenAI-compatible
     endpoint is used for Gemini so a single client code path works everywhere.
     """
-    # Preference order: fast free-tier providers first, Gemini last (truncated JSON fallback).
+    # Preference order: fast high-yield free providers first, then reliable
+    # paid/alt fallback, then a last-resort free model. groq gpt-oss-120b is the
+    # default primary (fast + schema-correct after the escaped-JSON parser fix);
+    # mistral-large-latest is the reliable fallback (verified to be the only
+    # generator consistently returning valid output); openrouter free is a
+    # last-resort when both are down.
+    #
+    # NOTE: nvidia was deliberately removed below — the configured model
+    # (meta/llama-3.1-8b-instruct) is EOL (HTTP 410) and every live chat model
+    # on this key is either unprovisioned (HTTP 404) or times out, so it only
+    # added guaranteed-failure latency as the terminal provider in the chain.
     candidates = [
         (
             "groq",
             "https://api.groq.com/openai/v1",
             app_config.Groq,
-            "openai/gpt-oss-20b",
-        ),
-        (
-            "openrouter",
-            "https://openrouter.ai/api/v1",
-            app_config.OpenRouter,
-            "z-ai/glm-5.2:free",
+            "openai/gpt-oss-120b",
         ),
         (
             "mistral",
             "https://api.mistral.ai/v1",
             app_config.Mistral,
-            "mistral-large-latest",
+            "mistral-small-latest",
         ),
         (
-            "nvidia",
-            "https://integrate.api.nvidia.com/v1",
-            app_config.Nvidia,
-            "meta/llama-3.1-8b-instruct",
+            "openrouter",
+            "https://openrouter.ai/api/v1",
+            app_config.OpenRouter,
+            "google/gemma-4-31b-it:free",
         ),
         (
             "huggingface",
@@ -331,12 +335,20 @@ class GeminiClientPool:
             stripped = _strip_md_fences(content)
             try:
                 json.loads(stripped)
-            except json.JSONDecodeError as exc:
-                preview = stripped[:300]
-                raise GenerationError(
-                    f"{provider.name} returned invalid JSON ({exc}). "
-                    f"Raw preview: {preview}"
-                )
+            except json.JSONDecodeError:
+                # Free OpenAI-compatible models (groq gpt-oss etc.) often
+                # double-encode the array as an escaped JSON string, e.g.
+                # [[\"D_doc\",...]] — semantically valid, just backslash-quoted.
+                # Accept it here so the parser in generation.py can recover it
+                # instead of rotating away from an otherwise-good provider.
+                try:
+                    json.loads(stripped.replace('\\"', '"'))
+                except json.JSONDecodeError as exc:
+                    preview = stripped[:300]
+                    raise GenerationError(
+                        f"{provider.name} returned invalid JSON ({exc}). "
+                        f"Raw preview: {preview}"
+                    ) from exc
 
             usage = body.get("usage") or {}
             return LLMResponse(

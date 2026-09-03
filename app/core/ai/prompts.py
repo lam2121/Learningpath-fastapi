@@ -41,7 +41,7 @@ testing the "{target_skill}" skill.
 [OUTPUT CONSTRAINT]
 - Output ONLY a raw, valid JSON array of arrays.
 - NO markdown formatting, NO backticks, NO object keys, NO conversational text.
-- Start directly with [[ and end directly with ]].
+- Start directly with [ and end directly with ].
 
 [INPUT DATA]
 - Role: "{role}"
@@ -50,7 +50,7 @@ testing the "{target_skill}" skill.
 - Target Skill Description: "{target_skill_description}"
 - Seed Tier 1 Data (Basic): "{seed_tier_1}"
 - Seed Tier 2 Data (Advanced): "{seed_tier_2}"
-- Questions: {num_questions} per call (distribute as 3 questions per difficulty band)
+- Questions: {num_questions} per call (distribute as 4 questions per difficulty band)
 
 [REQUIREMENTS]
 1. Each inner array has EXACTLY 6 elements:

@@ -118,7 +118,7 @@ def fetch_questions_by_role(
                 skill=SKILL_TAG_TO_SHORT.get(
                     record.skill, record.skill
                 ),  # 'D' | 'C' | 'T' | 'G'
-                level=record.level,  # 'Easy' | 'Medium' | 'Hard' | 'Expert'
+                level=record.level,  # 'Easy' | 'Medium' | 'Hard'
                 statement=statement,
                 options=options,
                 correct_answer=correct_answer,

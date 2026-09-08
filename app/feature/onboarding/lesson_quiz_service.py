@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+try:
+    from datetime import UTC
+except ImportError:
+    UTC = timezone.utc
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -19,7 +24,9 @@ from app.feature.onboarding.lesson_quiz_scoring import (
     compute_radar_score_for_skill,
     normalize_index_answer,
 )
+from app.feature.onboarding.radar_service import update_user_radar_score
 from app.models.lesson import Lesson
+from app.models.queue import Queue
 from app.models.topic import Topic
 from app.models.user_lesson import UserLesson
 from app.models.user_radar_score import UserRadarScore
@@ -136,6 +143,14 @@ def submit_lesson_quiz(
                 correct_with_hint_count += 1
             else:
                 correct_no_hint_count += 1
+        else:
+            _record_wrong_answer_in_queue(
+                db,
+                user_id=user_id,
+                lesson=lesson,
+                question=question,
+                user_answer=answer,
+            )
 
         question_results.append(
             {
@@ -204,7 +219,7 @@ def submit_lesson_quiz(
     }
 
     if current_attempt_is_new_best:
-        saved_state = current_attempt_snapshot
+        saved_state = dict(current_attempt_snapshot)
 
     user_lesson.attempt_count = attempt_count
     user_lesson.failed_attempts = failed_attempts
@@ -214,6 +229,10 @@ def submit_lesson_quiz(
     if current_attempt_passed and user_lesson.completed_at is None:
         user_lesson.completed_at = datetime.now(UTC).replace(tzinfo=None)
         user_lesson.status = "completed"
+        if "first_pass" not in saved_state:
+            saved_state["first_pass"] = current_attempt_snapshot
+        user_lesson.user_answers = saved_state
+        db.flush()
         first_pass_radar_applied = _apply_first_pass_radar_update(
             db,
             user_id=user_id,
@@ -338,24 +357,8 @@ def _apply_first_pass_radar_update(
     skill: str,
     lesson_performance: float,
 ) -> bool:
-    radar = db.query(UserRadarScore).filter(UserRadarScore.user_id == user_id).first()
-    if radar is None:
-        return False
-
-    start_vector = _normalize_radar_vector(radar.start_vector)
-    current_vector = _normalize_radar_vector(radar.current_vector or radar.start_vector)
-    prev_stack = _normalize_prev_stack(radar.prev_stack)
-
-    performances = list(prev_stack.get(skill, []))
-    performances.append(float(lesson_performance))
-    prev_stack[skill] = performances
-    current_vector[skill] = round(
-        compute_radar_score_for_skill(start_vector.get(skill, 0.0), performances), 2
-    )
-
-    radar.current_vector = current_vector
-    radar.prev_stack = prev_stack
-    return True
+    radar = update_user_radar_score(db, user_id)
+    return radar is not None
 
 
 def _extract_current_skill_score(radar: UserRadarScore | None, skill: str) -> float | None:
@@ -627,6 +630,50 @@ def _get_user_lesson(db: Session, user_id: int, lesson_id: int) -> UserLesson | 
         .order_by(UserLesson.id.asc())
         .first()
     )
+
+
+def _record_wrong_answer_in_queue(
+    db: Session,
+    *,
+    user_id: int,
+    lesson: Lesson,
+    question: dict[str, str],
+    user_answer: str,
+) -> None:
+    queue_item = (
+        db.query(Queue)
+        .filter(
+            Queue.user_id == user_id,
+            Queue.lesson_id == lesson.id,
+            Queue.question_id == question["question_id"],
+        )
+        .first()
+    )
+    options_list = _split_question_options(question.get("options", ""))
+    if queue_item is None:
+        queue_item = Queue(
+            user_id=user_id,
+            lesson_id=lesson.id,
+            question_id=question["question_id"],
+            question_type=question.get("question_type", "fill_blank"),
+            stem=question.get("stem", ""),
+            options=options_list,
+            correct_answer=question.get("correct_answer", ""),
+            explanation=question.get("explanation", ""),
+            last_wrong_answer=user_answer,
+            status="pending",
+            count=1,
+        )
+        db.add(queue_item)
+    else:
+        queue_item.count += 1
+        queue_item.last_wrong_answer = user_answer
+        queue_item.status = "pending"
+        queue_item.stem = question.get("stem", queue_item.stem)
+        queue_item.options = options_list if options_list else queue_item.options
+        queue_item.correct_answer = question.get("correct_answer", queue_item.correct_answer)
+        queue_item.explanation = question.get("explanation", queue_item.explanation)
+
 
 
 async def evaluate_user_answer(

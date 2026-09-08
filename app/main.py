@@ -11,6 +11,7 @@ from slowapi.util import get_remote_address
 
 from app.api_router import api_router
 from app.core.config import app_config
+from app.core.ensure_queue_schema import ensure_queue_schema
 from app.core.notification_stream import notification_stream_broker
 from app.feature.audio.tts_service import clean_audio_cache
 
@@ -43,10 +44,13 @@ async def lifespan(application: FastAPI):
     """Startup / shutdown lifecycle hook."""
     # Warn at startup if the shared JWT secret diverges (auth provisioning guard)
     _check_shared_jwt_secret()
+    # Ensure queue schema supports spaced repetition review
+    ensure_queue_schema()
     # Clean stale audio cache on boot
     clean_audio_cache()
     notification_stream_broker.attach_loop()
     yield
+
 
 
 # 1. Khởi tạo Limiter toàn cục

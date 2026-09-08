@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from app.feature.auth.auth_router import (
+from app.feature.user.user_router import (
     _compute_hint_breakdown,
     _derive_lesson_quiz_status,
     _extract_best_passing_attempt,

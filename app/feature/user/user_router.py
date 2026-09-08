@@ -13,14 +13,25 @@ from app.core.roadmap import lesson_is_assigned
 from app.core.ai.gemini import GeminiClientPool
 from app.core.ai.prompts import PROMPT_E1_TEMPLATE
 from app.feature.onboarding.lesson_quiz_scoring import LESSON_PASS_THRESHOLD_PERCENT
+from app.feature.user.quiz_review_service import (
+    get_user_quiz_review_items,
+    submit_user_quiz_review,
+)
 from app.feature.user.user_schema import (
     AICoachMessageRequest,
     AICoachMessageResponse,
+    FinalQuizHistoryEntryResponse,
     LessonQuizHistoryEntryResponse,
+    QuizReviewListResponse,
+    QuizReviewSubmitRequest,
+    QuizReviewSubmitResponse,
     StudySettingsUpdateRequest,
+    TopicQuizHistoryEntryResponse,
     UserProfileResponse,
 )
+from app.models.course import Course
 from app.models.lesson import Lesson
+from app.models.queue import Queue
 from app.models.topic import Topic
 from app.models.user import LEARNING_NONE, User
 from app.models.user_course import UserCourse
@@ -28,6 +39,7 @@ from app.models.user_lesson import UserLesson
 from app.models.user_placement_test import UserPlacementTest
 from app.models.user_radar_score import UserRadarScore
 from app.models.user_roadmap import UserRoadmap
+from app.models.user_topic_quiz import UserTopicQuiz
 
 router = APIRouter()
 DEFAULT_DAILY_STUDY_MINUTES = 120
@@ -343,10 +355,208 @@ def _build_lesson_quiz_history(
     history.sort(
         key=lambda entry: (
             entry.completed_at or entry.last_submitted_at or datetime.min,
-            entry.best_score_percent,
+            entry.best_score_percent or 0.0,
         ),
         reverse=True,
     )
+    return history
+
+
+def _build_topic_quiz_history(
+    db: Session, user_id: int
+) -> list[TopicQuizHistoryEntryResponse]:
+    rows = (
+        db.query(Topic, UserRoadmap, UserTopicQuiz)
+        .join(
+            UserRoadmap,
+            (UserRoadmap.topic_id == Topic.id) & (UserRoadmap.user_id == user_id),
+        )
+        .outerjoin(
+            UserTopicQuiz,
+            (UserTopicQuiz.topic_id == Topic.id) & (UserTopicQuiz.user_id == user_id),
+        )
+        .order_by(UserRoadmap.sort_order.asc())
+        .all()
+    )
+
+    history: list[TopicQuizHistoryEntryResponse] = []
+    for topic, user_roadmap, user_topic_quiz in rows:
+        topic_sort_order = (
+            (user_roadmap.sort_order + 1) if user_roadmap is not None else None
+        )
+
+        attempt_count = user_topic_quiz.attempt_count if user_topic_quiz else 0
+        failed_attempts = user_topic_quiz.failed_attempts if user_topic_quiz else 0
+        status = user_topic_quiz.status if user_topic_quiz else "locked"
+        best_score_percent = (
+            user_topic_quiz.best_score_percent
+            if (user_topic_quiz and attempt_count > 0)
+            else None
+        )
+        passed = status == "passed"
+
+        user_answers = (
+            _coerce_json_object(user_topic_quiz.user_answers)
+            if user_topic_quiz
+            else {}
+        )
+        best_attempt = (
+            user_answers.get("best_attempt")
+            or user_answers.get("latest_attempt")
+            or {}
+        )
+
+        correct_count = (
+            int(best_attempt.get("correct_count", 0))
+            if isinstance(best_attempt, dict)
+            else 0
+        )
+        total_questions = (
+            int(best_attempt.get("total_questions", 30))
+            if isinstance(best_attempt, dict)
+            else 30
+        )
+        if (
+            correct_count == 0
+            and best_score_percent is not None
+            and total_questions > 0
+        ):
+            correct_count = int(round(total_questions * (best_score_percent / 100.0)))
+
+        completed_at = user_topic_quiz.completed_at if user_topic_quiz else None
+        recorded_at = completed_at or (
+            getattr(user_topic_quiz, "updated_at", None) if user_topic_quiz else None
+        )
+
+        history.append(
+            TopicQuizHistoryEntryResponse(
+                topic_id=topic.id,
+                topic_name=topic.name,
+                topic_sort_order=topic_sort_order,
+                status=status,
+                best_score_percent=best_score_percent,
+                passed=passed,
+                attempt_count=attempt_count,
+                failed_attempts=failed_attempts,
+                correct_count=correct_count,
+                total_questions=total_questions,
+                recorded_at=recorded_at,
+                completed_at=completed_at,
+            )
+        )
+    return history
+
+
+def _build_final_quiz_history(
+    db: Session, user_id: int, user: User
+) -> list[FinalQuizHistoryEntryResponse]:
+    user_courses = (
+        db.query(UserCourse, Course)
+        .join(Course, Course.id == UserCourse.course_id)
+        .filter(UserCourse.user_id == user_id)
+        .all()
+    )
+
+    if not user_courses:
+        course = None
+        if user.job_role_id:
+            course = (
+                db.query(Course)
+                .filter(Course.job_role_id == user.job_role_id)
+                .first()
+            )
+        if not course:
+            course = db.query(Course).first()
+        if course:
+            return [
+                FinalQuizHistoryEntryResponse(
+                    course_id=course.id,
+                    course_name=course.name,
+                    status="locked",
+                    best_score_percent=None,
+                    passed=False,
+                    progress=0.0,
+                    attempt_count=0,
+                    failed_attempts=0,
+                    correct_count=0,
+                    total_questions=50,
+                    skill_scores=None,
+                    unlocked_at=None,
+                    completed_at=None,
+                    recorded_at=None,
+                )
+            ]
+        return []
+
+    history: list[FinalQuizHistoryEntryResponse] = []
+    for user_course, course in user_courses:
+        status = user_course.status or "locked"
+        attempt_count = user_course.attempt_count or 0
+        failed_attempts = user_course.failed_attempts or 0
+        best_score_percent = (
+            user_course.best_score_percent if attempt_count > 0 else None
+        )
+        passed = status == "passed"
+
+        user_answers = _coerce_json_object(user_course.user_answers)
+        best_attempt = (
+            user_answers.get("best_attempt")
+            or user_answers.get("latest_attempt")
+            or {}
+        )
+
+        correct_count = (
+            int(best_attempt.get("correct_count", 0))
+            if isinstance(best_attempt, dict)
+            else 0
+        )
+        total_questions = (
+            int(best_attempt.get("total_questions", 50))
+            if isinstance(best_attempt, dict)
+            else 50
+        )
+        if (
+            correct_count == 0
+            and best_score_percent is not None
+            and total_questions > 0
+        ):
+            correct_count = int(round(total_questions * (best_score_percent / 100.0)))
+
+        raw_skill_scores = user_course.skill_scores or (
+            best_attempt.get("skill_scores")
+            if isinstance(best_attempt, dict)
+            else None
+        )
+        skill_scores: dict[str, float] | None = None
+        if isinstance(raw_skill_scores, dict):
+            skill_scores = {}
+            for k, v in raw_skill_scores.items():
+                if isinstance(v, (int, float)):
+                    skill_scores[str(k)] = float(v)
+                elif isinstance(v, dict) and "percent" in v and isinstance(v["percent"], (int, float)):
+                    skill_scores[str(k)] = float(v["percent"])
+                elif isinstance(v, dict) and "score_percent" in v and isinstance(v["score_percent"], (int, float)):
+                    skill_scores[str(k)] = float(v["score_percent"])
+
+        recorded_at = user_course.completed_at or getattr(user_course, "updated_at", None)
+        history.append(
+            FinalQuizHistoryEntryResponse(
+                course_id=course.id,
+                course_name=course.name,
+                status=status,
+                best_score_percent=best_score_percent,
+                passed=passed,
+                progress=user_course.progress or 0.0,
+                attempt_count=attempt_count,
+                failed_attempts=failed_attempts,
+                correct_count=correct_count,
+                total_questions=total_questions,
+                skill_scores=skill_scores,
+                unlocked_at=user_course.unlocked_at,
+                completed_at=user_course.completed_at,
+                recorded_at=user_course.completed_at or user_course.updated_at,
+            )
+        )
     return history
 
 
@@ -380,6 +590,8 @@ def _build_user_profile_response(db: Session, user: User) -> UserProfileResponse
     daily_study_minutes = user.daily_study_minutes or DEFAULT_DAILY_STUDY_MINUTES
     total_studied_minutes, study_history = _build_study_history(db, user.id)
     lesson_quiz_history = _build_lesson_quiz_history(db, user.id)
+    topic_quiz_history = _build_topic_quiz_history(db, user.id)
+    final_quiz_history = _build_final_quiz_history(db, user.id, user)
     initial_skill_scores, current_skill_scores = _build_skill_score_snapshots(
         db,
         user.id,
@@ -388,6 +600,16 @@ def _build_user_profile_response(db: Session, user: User) -> UserProfileResponse
     if total_estimated_minutes > 0:
         days_needed = max(1, ceil(total_estimated_minutes / daily_study_minutes))
         estimated_finish = date.today() + timedelta(days=days_needed - 1)
+
+    quiz_review_count = (
+        db.query(Queue)
+        .filter(
+            Queue.user_id == user.id,
+            Queue.lesson_id.isnot(None),
+            Queue.status == "pending",
+        )
+        .count()
+    )
 
     return UserProfileResponse(
         id=user.id,
@@ -402,8 +624,11 @@ def _build_user_profile_response(db: Session, user: User) -> UserProfileResponse
         total_studied_minutes=total_studied_minutes,
         study_history=study_history,
         lesson_quiz_history=lesson_quiz_history,
+        topic_quiz_history=topic_quiz_history,
+        final_quiz_history=final_quiz_history,
         initial_skill_scores=initial_skill_scores,
         current_skill_scores=current_skill_scores,
+        quiz_review_count=quiz_review_count,
     )
 
 
@@ -424,6 +649,9 @@ def _reset_user_career_track(db: Session, user: User) -> None:
         db.query(UserPlacementTest).filter(
             UserPlacementTest.user_id == user.id
         ).delete(synchronize_session=False)
+        db.query(Queue).filter(Queue.user_id == user.id).delete(
+            synchronize_session=False
+        )
 
         user.job_role_id = None
         user.learning_status = LEARNING_NONE
@@ -496,4 +724,32 @@ async def generate_ai_coach_message(
         )
     finally:
         await client.close()
+
+
+@router.get("/me/quiz-review", response_model=QuizReviewListResponse)
+def get_my_quiz_review(
+    limit: int = 5,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Retrieve up to 5 wrong questions from previous lesson quizzes for morning review."""
+    return get_user_quiz_review_items(db, current_user.id, limit=limit)
+
+
+@router.post("/me/quiz-review/submit", response_model=QuizReviewSubmitResponse)
+def submit_my_quiz_review(
+    payload: QuizReviewSubmitRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Submit answers for review questions. Correct answers are removed from Queue;
+
+    incorrect answers remain for future review.
+    """
+    return submit_user_quiz_review(
+        db,
+        current_user.id,
+        [answer.model_dump() for answer in payload.answers],
+    )
+
 

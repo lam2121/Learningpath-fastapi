@@ -34,6 +34,8 @@ from app.models.user_lesson import UserLesson
 from app.models.user_placement_test import UserPlacementTest
 from app.models.user_radar_score import UserRadarScore
 from app.models.user_roadmap import UserRoadmap
+from app.models.user_topic_quiz import UserTopicQuiz
+from app.models.user_course import UserCourse
 
 # Map v2.1 full tag -> short letter used by the existing frontend response
 SKILL_TAG_TO_SHORT = {
@@ -251,20 +253,22 @@ def complete_placement_test(
         )
 
     user.learning_status = LEARNING_ENROLLED
-    db.commit()
 
     # Phase A: build the zero-AI learning roadmap (spec §2.C) from the saved
     # answers. Silently skips when the role has no topics yet (B1/B2 not run);
     # a later recompute (POST /onboarding/roadmap/select) fills it.
-    build_and_save_roadmap(db, user_id)
+    build_and_save_roadmap(db, user_id, commit=False)
     
     # Initialize Radar Score from placement test
-    _initialize_radar_score(db, user_id)
+    _initialize_radar_score(db, user_id, commit=False)
+
+    # Single atomic commit for the entire placement test completion
+    db.commit()
     
     return True
 
 
-def _initialize_radar_score(db: Session, user_id: int):
+def _initialize_radar_score(db: Session, user_id: int, commit: bool = True):
     """
     Computes and persists the initial radar score based on the placement test
     weighted accuracy (spec §3), and saves it into UserRadarScore.
@@ -298,7 +302,10 @@ def _initialize_radar_score(db: Session, user_id: int):
         prev_stack=prev_stack,
     )
     db.add(radar)
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
 
 
 def _load_placement_answer_rows(db: Session, user_id: int):
@@ -314,7 +321,9 @@ def _load_placement_answer_rows(db: Session, user_id: int):
     )
 
 
-def _parse_answer_rows(rows) -> tuple[list[PlacementAnswerDetail], dict, dict]:
+def _parse_answer_rows(
+    rows,
+) -> tuple[list[PlacementAnswerDetail], dict[str, int], dict[str, int], dict[str, int]]:
     """Build per-question detail + per-skill correct/total counts.
 
     Shared by `get_placement_test_result` and `compute_skill_scores` so the
@@ -525,6 +534,7 @@ def _build_and_save_roadmap(
     track: str | None = None,
     role_id: int | None = None,
     raise_on_missing: bool = False,
+    commit: bool = True,
 ) -> None:
     """Select the user's 8-topic roadmap (spec §2.C) and persist it
     (idempotent delete+insert). When `raise_on_missing` is False the function
@@ -534,7 +544,8 @@ def _build_and_save_roadmap(
     """
     from app.models.user import User
 
-    user = db.query(User).filter(User.id == user_id).first()
+    # Lock user row to serialize concurrent roadmap modifications for the same user
+    user = db.query(User).filter(User.id == user_id).with_for_update().first()
     if not user:
         if raise_on_missing:
             raise HTTPException(
@@ -594,7 +605,10 @@ def _build_and_save_roadmap(
         db.add(
             UserRoadmap(user_id=user_id, topic_id=topic.id, sort_order=i, track=track)
         )
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     notification_stream_broker.publish_nowait(
         user_id,
         {
@@ -604,9 +618,9 @@ def _build_and_save_roadmap(
     )
 
 
-def build_and_save_roadmap(db: Session, user_id: int) -> None:
+def build_and_save_roadmap(db: Session, user_id: int, commit: bool = True) -> None:
     """Silent roadmap build used by the placement-test completion trigger."""
-    _build_and_save_roadmap(db, user_id)
+    _build_and_save_roadmap(db, user_id, commit=commit)
 
 
 def _compute_topic_unlock_map(
@@ -775,16 +789,46 @@ def get_user_roadmap(db: Session, user_id: int) -> RoadmapResponse:
                 int(lesson_id)
             )
 
+    topic_quiz_records: dict[int, UserTopicQuiz] = {}
+    if topic_ids:
+        for record in (
+            db.query(UserTopicQuiz)
+            .filter(
+                UserTopicQuiz.user_id == user_id,
+                UserTopicQuiz.topic_id.in_(topic_ids),
+            )
+            .all()
+        ):
+            topic_quiz_records[int(record.topic_id)] = record
+
     roadmap_topics: list[RoadmapTopicResponse] = []
     total_estimated_minutes = 0
     for topic in topics:
         topic_lessons = lessons_by_topic.get(topic.id, [])
+        completed_set = completed_lesson_ids_by_topic.get(topic.id, set())
         unlock_map = _compute_topic_unlock_map(
             topic_lessons,
-            completed_lesson_ids_by_topic.get(topic.id, set()),
+            completed_set,
         )
         topic_minutes = sum((lesson.estimated_minutes or 0) for lesson in topic_lessons)
         total_estimated_minutes += topic_minutes
+
+        all_lessons_completed = (
+            len(topic_lessons) > 0
+            and all(l.id in completed_set for l in topic_lessons)
+        )
+        tq_rec = topic_quiz_records.get(topic.id)
+        if tq_rec is not None and tq_rec.status == "passed":
+            tq_status = "passed"
+        elif all_lessons_completed:
+            tq_status = tq_rec.status if (tq_rec and tq_rec.status in ("ready", "failed")) else "ready"
+        else:
+            tq_status = "locked"
+
+        tq_score = tq_rec.best_score_percent if (tq_rec and tq_rec.attempt_count > 0) else None
+        tq_attempts = tq_rec.attempt_count if tq_rec else 0
+        weakest_ids = [int(x) for x in (tq_rec.weakest_lesson_ids or [])] if (tq_rec and tq_status == "failed") else []
+
         roadmap_topics.append(
             RoadmapTopicResponse(
                 id=topic.id,
@@ -793,6 +837,10 @@ def get_user_roadmap(db: Session, user_id: int) -> RoadmapResponse:
                 seed_tier=topic.seed_tier,
                 sort_order=order[topic.id] + 1,
                 total_estimated_minutes=topic_minutes,
+                topic_quiz_status=tq_status,
+                topic_quiz_score=tq_score,
+                topic_quiz_attempt_count=tq_attempts,
+                weakest_lesson_ids=weakest_ids,
                 lessons=[
                     RoadmapLessonResponse(
                         id=lesson.id,
@@ -802,6 +850,7 @@ def get_user_roadmap(db: Session, user_id: int) -> RoadmapResponse:
                         estimated_minutes=lesson.estimated_minutes,
                         is_generated=bool(lesson.is_generated),
                         is_unlocked=unlock_map.get(lesson.id, False),
+                        is_completed=lesson.id in completed_set,
                         theory_content=(
                             lesson.theory_content
                             if unlock_map.get(lesson.id, False)
@@ -818,11 +867,41 @@ def get_user_roadmap(db: Session, user_id: int) -> RoadmapResponse:
             )
         )
 
+    all_topic_quizzes_passed = (
+        len(roadmap_topics) > 0
+        and all(t.topic_quiz_status == "passed" for t in roadmap_topics)
+    )
+
+    user_course = (
+        db.query(UserCourse)
+        .filter(UserCourse.user_id == user_id)
+        .first()
+    )
+    if not all_topic_quizzes_passed:
+        final_quiz_status = "locked"
+    elif user_course and user_course.status == "passed":
+        final_quiz_status = "passed"
+    elif user_course and user_course.status == "failed":
+        final_quiz_status = "failed"
+    else:
+        final_quiz_status = "ready"
+
+    final_quiz_score = (
+        user_course.best_score_percent
+        if (user_course and user_course.attempt_count > 0)
+        else None
+    )
+    final_quiz_attempts = user_course.attempt_count if user_course else 0
+
     return RoadmapResponse(
         track=track,
         topics=roadmap_topics,
         assigned_lessons=assigned_lessons(topics, lessons, track),
         total_estimated_minutes=total_estimated_minutes,
+        final_quiz_status=final_quiz_status,
+        final_quiz_score=final_quiz_score,
+        final_quiz_attempt_count=final_quiz_attempts,
+        all_topic_quizzes_passed=all_topic_quizzes_passed,
     )
 
 
@@ -866,6 +945,7 @@ def recompute_roadmap(
             track=track,
             role_id=role_id,
             raise_on_missing=True,
+            commit=False,
         )
         # Dev-mode enrollment (docs/07 deviation #23): a skills-override roadmap
         # is a real live roadmap in a real role, so persist the enrollment so the
@@ -874,7 +954,6 @@ def recompute_roadmap(
         if user is not None:
             user.job_role_id = role_id
             user.learning_status = LEARNING_ENROLLED
-            db.commit()
 
         # Initialize radar from dev-mode difficulty breakdown (v3 scoring).
         # start_vector = weighted_accuracy% × 0.85 per skill.

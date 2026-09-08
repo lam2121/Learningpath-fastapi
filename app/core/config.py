@@ -12,9 +12,11 @@ class AppConfig(BaseSettings):
 
     # Connection pool settings
     DB_POOL_MIN_SIZE: int = 5
-    DB_POOL_MAX_SIZE: int = 20
+    DB_POOL_MAX_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 30
+    DB_POOL_TIMEOUT: int = 15
     DB_CONNECT_TIMEOUT: int = 30
-    DB_POOL_RECYCLE: int = 3600
+    DB_POOL_RECYCLE: int = 1800
 
     SECRET_KEY: str
     ALGORITHM: str = "HS256"

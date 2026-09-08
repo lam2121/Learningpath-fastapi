@@ -19,3 +19,4 @@ from app.models.user_lesson import UserLesson
 from app.models.user_placement_test import UserPlacementTest
 from app.models.user_radar_score import UserRadarScore
 from app.models.user_roadmap import UserRoadmap
+from app.models.user_topic_quiz import UserTopicQuiz

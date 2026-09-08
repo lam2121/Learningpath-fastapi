@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -1469,94 +1470,188 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
             except KillSwitchError as exc:
                 return {"status": "failed", "error": str(exc)}
 
-            client = GeminiClientPool()
+            lesson_info = {
+                "id": lesson.id,
+                "title": lesson.title,
+                "primary_skill": lesson.primary_skill,
+                "difficulty_tier": lesson.difficulty_tier,
+                "topic_id": topic.id,
+                "topic_name": topic.name,
+                "role_id": role.id,
+                "role_name": role.name,
+                "job_description": role.job_description,
+                "skill_definitions": role.skill_definitions or {},
+            }
+        finally:
+            db.close()
 
-            # ── C-1: theory ──────────────────────────────────────────────────
+        # Build lightweight context objects so AI generator functions receive expected attributes
+        role_ctx = SimpleNamespace(
+            id=lesson_info["role_id"],
+            name=lesson_info["role_name"],
+            job_description=lesson_info["job_description"],
+            skill_definitions=lesson_info["skill_definitions"],
+        )
+        topic_ctx = SimpleNamespace(
+            id=lesson_info["topic_id"],
+            name=lesson_info["topic_name"],
+            role_id=lesson_info["role_id"],
+        )
+        lesson_ctx = SimpleNamespace(
+            id=lesson_info["id"],
+            title=lesson_info["title"],
+            primary_skill=lesson_info["primary_skill"],
+            difficulty_tier=lesson_info["difficulty_tier"],
+            topic_id=lesson_info["topic_id"],
+        )
+
+        client = GeminiClientPool()
+        role_id = lesson_info["role_id"]
+        topic_id = lesson_info["topic_id"]
+        lesson_title = lesson_info["title"]
+
+        try:
+            # ── C-1: theory (runs async without holding any DB connection) ────
             (
                 theory,
                 theory_usage,
                 theory_error,
                 c1_raw,
                 c1_checks,
-            ) = await _generate_lesson_theory(client, role, topic, lesson)
-            for log in theory_usage:
-                _log_usage(
-                    db,
-                    "C1",
-                    role_id,
-                    log["prompt_tokens"],
-                    log["completion_tokens"],
-                    log["status"],
-                    log.get("provider"),
-                    log.get("model"),
-                )
+            ) = await _generate_lesson_theory(client, role_ctx, topic_ctx, lesson_ctx)
+
             if theory is None:
-                _record_rejected(
-                    db,
-                    "C1",
-                    role_id,
-                    f"lesson={lesson.title}",
-                    theory_error or "unknown",
-                    c1_raw,
-                    c1_checks,
-                )
-                _log_usage(db, "C1", role_id, 0, 0, "rejected")
-                db.commit()
+                db = SessionLocal()
+                try:
+                    for log in theory_usage:
+                        _log_usage(
+                            db,
+                            "C1",
+                            role_id,
+                            log["prompt_tokens"],
+                            log["completion_tokens"],
+                            log["status"],
+                            log.get("provider"),
+                            log.get("model"),
+                        )
+                    _record_rejected(
+                        db,
+                        "C1",
+                        role_id,
+                        f"lesson={lesson_title}",
+                        theory_error or "unknown",
+                        c1_raw,
+                        c1_checks,
+                    )
+                    _log_usage(db, "C1", role_id, 0, 0, "rejected")
+                    db.commit()
+                finally:
+                    db.close()
                 return {"status": "failed", "error": theory_error or "C-1 failed"}
 
-            # ── C-2: quiz (grounded in the generated theory) ─────────────────
+            # ── C-2: quiz (grounded in the generated theory, async without DB connection) ─
             (
                 quiz,
                 quiz_usage,
                 quiz_error,
                 c2_raw,
                 c2_checks,
-            ) = await _generate_lesson_quiz(client, role, topic, lesson, theory)
-            for log in quiz_usage:
-                _log_usage(
-                    db,
-                    "C2",
-                    role_id,
-                    log["prompt_tokens"],
-                    log["completion_tokens"],
-                    log["status"],
-                    log.get("provider"),
-                    log.get("model"),
-                )
+            ) = await _generate_lesson_quiz(client, role_ctx, topic_ctx, lesson_ctx, theory)
+
             if quiz is None:
-                _record_rejected(
-                    db,
-                    "C2",
-                    role_id,
-                    f"lesson={lesson.title}",
-                    quiz_error or "unknown",
-                    c2_raw,
-                    c2_checks,
-                )
-                _log_usage(db, "C2", role_id, 0, 0, "rejected")
-                db.commit()
+                db = SessionLocal()
+                try:
+                    for log in theory_usage:
+                        _log_usage(
+                            db,
+                            "C1",
+                            role_id,
+                            log["prompt_tokens"],
+                            log["completion_tokens"],
+                            log["status"],
+                            log.get("provider"),
+                            log.get("model"),
+                        )
+                    for log in quiz_usage:
+                        _log_usage(
+                            db,
+                            "C2",
+                            role_id,
+                            log["prompt_tokens"],
+                            log["completion_tokens"],
+                            log["status"],
+                            log.get("provider"),
+                            log.get("model"),
+                        )
+                    _record_rejected(
+                        db,
+                        "C2",
+                        role_id,
+                        f"lesson={lesson_title}",
+                        quiz_error or "unknown",
+                        c2_raw,
+                        c2_checks,
+                    )
+                    _log_usage(db, "C2", role_id, 0, 0, "rejected")
+                    db.commit()
+                finally:
+                    db.close()
                 return {"status": "failed", "error": quiz_error or "C-2 failed"}
 
-            lesson.theory_content = theory
-            lesson.quiz_content = quiz
-            lesson.estimated_minutes = estimate_lesson_duration(theory, quiz)
-            lesson.is_generated = True
-            db.commit()
+            # Persist successful generation results with a short-lived DB session
+            db = SessionLocal()
+            try:
+                for log in theory_usage:
+                    _log_usage(
+                        db,
+                        "C1",
+                        role_id,
+                        log["prompt_tokens"],
+                        log["completion_tokens"],
+                        log["status"],
+                        log.get("provider"),
+                        log.get("model"),
+                    )
+                for log in quiz_usage:
+                    _log_usage(
+                        db,
+                        "C2",
+                        role_id,
+                        log["prompt_tokens"],
+                        log["completion_tokens"],
+                        log["status"],
+                        log.get("provider"),
+                        log.get("model"),
+                    )
 
-            assigned_user_ids = [
-                int(row.user_id)
-                for row in db.query(UserRoadmap.user_id)
-                .filter(UserRoadmap.topic_id == lesson.topic_id)
-                .distinct()
-                .all()
-            ]
+                lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
+                if lesson:
+                    lesson.theory_content = theory
+                    lesson.quiz_content = quiz
+                    lesson.estimated_minutes = estimate_lesson_duration(theory, quiz)
+                    lesson.is_generated = True
+
+                assigned_user_ids = [
+                    int(row.user_id)
+                    for row in db.query(UserRoadmap.user_id)
+                    .filter(UserRoadmap.topic_id == topic_id)
+                    .distinct()
+                    .all()
+                ]
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
+
             await notification_stream_broker.publish_many(
                 assigned_user_ids,
                 {
                     "type": "roadmap_updated",
                     "reason": "lesson_generated",
                     "lesson_id": int(lesson_id),
-                    "topic_id": int(lesson.topic_id),
+                    "topic_id": int(topic_id),
                 },
             )
 
@@ -1566,12 +1661,15 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
             return {"status": "completed", "message": "lesson generated (C1 + C2)"}
         except Exception as exc:
             logger.exception("Generator C crashed for lesson %s", lesson_id)
-            db.rollback()
-            _record_rejected(
-                db, "C1", role_id, f"lesson={lesson.title}", str(exc), None, None
-            )
-            _log_usage(db, "C1", role_id, 0, 0, "rejected")
-            db.commit()
+            db = SessionLocal()
+            try:
+                _record_rejected(
+                    db, "C1", role_id, f"lesson={lesson_title}", str(exc), None, None
+                )
+                _log_usage(db, "C1", role_id, 0, 0, "rejected")
+                db.commit()
+            except Exception:
+                db.rollback()
+            finally:
+                db.close()
             return {"status": "failed", "error": str(exc)}
-        finally:
-            db.close()

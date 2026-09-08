@@ -35,7 +35,7 @@ class FakeDB:
 
     def query(self, *models):
         if len(models) == 1:
-            return FakeQuery(self.query_rows[models[0]])
+            return FakeQuery(self.query_rows.get(models[0], []))
         # Multi-entity queries (e.g. db.query(UserLesson.lesson_id, Lesson.topic_id))
         # are exercised via a JOIN and return no rows in these mocks.
         return FakeQuery([])

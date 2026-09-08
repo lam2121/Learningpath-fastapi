@@ -3,10 +3,11 @@ from typing import Optional
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import app_config
-from app.core.database import get_db
+from app.core.database import SessionLocal, get_db
 from app.models.user import User
  
 # CareerPath consumes bearer tokens issued by the external auth-service.
@@ -52,7 +53,13 @@ def _decode_auth_service_access_token(token: str) -> dict:
 
 
 def _get_or_provision_user(payload: dict, db: Session) -> User:
-    """Provision or update the local app profile from trusted auth-service claims."""
+    """Provision or update the local app profile from trusted auth-service claims.
+
+    Reads from the request's session `db`. If a user needs to be provisioned or
+    updated, uses an isolated standalone session (`SessionLocal()`) to perform
+    the write atomically so that the caller request's session transaction is never
+    prematurely committed inside a dependency.
+    """
     user_id = payload.get("user_id") or payload.get("sub")
     email = str(payload.get("email") or "").strip().lower()
 
@@ -75,6 +82,7 @@ def _get_or_provision_user(payload: dict, db: Session) -> User:
     if not display_name:
         raise _credentials_exception()
 
+    # ── Fast path: check in caller's session (read-only) ─────────────────
     user_by_id = db.query(User).filter(User.id == user_id_int).first()
     user_by_email = db.query(User).filter(User.email == email).first()
 
@@ -90,36 +98,64 @@ def _get_or_provision_user(payload: dict, db: Session) -> User:
 
     user = user_by_id or user_by_email
 
-    if user is None:
-        user = User(
-            id=user_id_int,
-            name=display_name,
-            email=email,
-            role_id=role_id,
-            hashed_password="",
-            learning_status="none",
-            daily_study_minutes=120,
+    if user is not None:
+        needs_update = (
+            user.email != email
+            or user.role_id != role_id
+            or (not user.name or user.name != display_name)
         )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        return user
+        if not needs_update:
+            return user
 
-    needs_update = False
-    if user.email != email:
-        user.email = email
-        needs_update = True
-    if user.role_id != role_id:
-        user.role_id = role_id
-        needs_update = True
-    if not user.name or user.name != display_name:
-        user.name = display_name
-        needs_update = True
-    if needs_update:
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+    # ── Isolated Provisioning: use standalone SessionLocal ───────────────
+    # Keeps the request's session transaction clean and uncommitted.
+    provision_db = SessionLocal()
+    try:
+        p_user_by_id = provision_db.query(User).filter(User.id == user_id_int).first()
+        p_user_by_email = provision_db.query(User).filter(User.email == email).first()
+        p_user = p_user_by_id or p_user_by_email
 
+        if p_user is None:
+            new_user = User(
+                id=user_id_int,
+                name=display_name,
+                email=email,
+                role_id=role_id,
+                hashed_password="",
+                learning_status="none",
+                daily_study_minutes=120,
+            )
+            provision_db.add(new_user)
+            provision_db.commit()
+        else:
+            updated = False
+            if p_user.email != email:
+                p_user.email = email
+                updated = True
+            if p_user.role_id != role_id:
+                p_user.role_id = role_id
+                updated = True
+            if not p_user.name or p_user.name != display_name:
+                p_user.name = display_name
+                updated = True
+            if updated:
+                provision_db.add(p_user)
+                provision_db.commit()
+    except IntegrityError:
+        # A concurrent request provisioned this user at the exact same instant
+        provision_db.rollback()
+    except Exception:
+        provision_db.rollback()
+        raise
+    finally:
+        provision_db.close()
+
+    # Re-fetch from caller's session so returned entity is bound to request's `db`
+    user = db.query(User).filter(User.id == user_id_int).first()
+    if user is None:
+        user = db.query(User).filter(User.email == email).first()
+    if user is None:
+        raise _credentials_exception()
     return user
 
 

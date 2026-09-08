@@ -41,6 +41,38 @@ class LessonQuizHistoryEntryResponse(BaseModel):
     last_submitted_at: datetime | None = None
 
 
+class TopicQuizHistoryEntryResponse(BaseModel):
+    topic_id: int
+    topic_name: str
+    topic_sort_order: int | None = None
+    status: str
+    best_score_percent: float | None = None
+    passed: bool = False
+    attempt_count: int = 0
+    failed_attempts: int = 0
+    correct_count: int = 0
+    total_questions: int = 0
+    recorded_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class FinalQuizHistoryEntryResponse(BaseModel):
+    course_id: int
+    course_name: str
+    status: str
+    best_score_percent: float | None = None
+    passed: bool = False
+    progress: float = 0.0
+    attempt_count: int = 0
+    failed_attempts: int = 0
+    correct_count: int = 0
+    total_questions: int = 0
+    skill_scores: dict[str, float] | None = None
+    unlocked_at: datetime | None = None
+    completed_at: datetime | None = None
+    recorded_at: datetime | None = None
+
+
 class UserProfileResponse(UserResponse):
     started_at: datetime | None = None
     estimated_finish: date | None = None
@@ -49,8 +81,11 @@ class UserProfileResponse(UserResponse):
     total_studied_minutes: int = 0
     study_history: list[StudyHistoryEntryResponse] = []
     lesson_quiz_history: list[LessonQuizHistoryEntryResponse] = []
+    topic_quiz_history: list[TopicQuizHistoryEntryResponse] = []
+    final_quiz_history: list[FinalQuizHistoryEntryResponse] = []
     initial_skill_scores: dict[str, float] | None = None
     current_skill_scores: dict[str, float] | None = None
+    quiz_review_count: int = 0
 
 
 class StudySettingsUpdateRequest(BaseModel):
@@ -67,4 +102,52 @@ class AICoachMessageRequest(BaseModel):
 
 class AICoachMessageResponse(BaseModel):
     feedback_summary: str
+
+
+class QuizReviewQuestionItem(BaseModel):
+    review_id: int
+    lesson_id: int
+    lesson_title: str
+    question_id: str
+    question_type: str
+    stem: str
+    options: list[str] = []
+    explanation: str = ""
+    wrong_count: int = 1
+
+
+class QuizReviewListResponse(BaseModel):
+    total_count: int
+    review_questions: list[QuizReviewQuestionItem] = []
+
+
+class QuizReviewAnswerItem(BaseModel):
+    review_id: int
+    answer: str
+
+
+class QuizReviewSubmitRequest(BaseModel):
+    answers: list[QuizReviewAnswerItem]
+
+
+class QuizReviewItemResult(BaseModel):
+    review_id: int
+    question_id: str
+    question_type: str
+    stem: str
+    options: list[str] = []
+    user_answer: str
+    correct_answer: str
+    explanation: str
+    is_correct: bool
+    removed: bool
+
+
+class QuizReviewSubmitResponse(BaseModel):
+    results: list[QuizReviewItemResult]
+    cleared_count: int
+    failed_count: int
+    total_reviewed: int
+    remaining_count: int
+
 

@@ -1242,7 +1242,6 @@ async def _generate_lesson_theory(
             response: LLMResponse = await client.generate_json(
                 call_prompt,
                 max_output_tokens=C1_MAX_OUTPUT_TOKENS,
-                model=app_config.GEMINI_PRO_MODEL,
             )
         except GenerationError as exc:
             last_error = f"Provider error: {exc}"
@@ -1359,7 +1358,6 @@ async def _generate_lesson_quiz(
                 call_prompt,
                 temperature=C2_TEMPERATURE,
                 max_output_tokens=C2_MAX_OUTPUT_TOKENS,
-                model=app_config.GEMINI_PRO_MODEL,
             )
         except GenerationError as exc:
             last_error = f"Provider error: {exc}"

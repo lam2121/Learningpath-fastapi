@@ -32,12 +32,12 @@ class AppConfig(BaseSettings):
     # below; override via AUTH_SHARED_SECRET if it ever changes.
     AUTH_SHARED_SECRET: str = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
 
-    GEMINI_API_KEY: str = ""
-    GEMINI_FLASH_MODEL: str = "gemini-2.5-flash"
+    GEMINI_API_KEY: str = "AQ.Ab8RN6LGGkS15u1wmcqZSgJXruR3ZUvO3uwkaU9Fyij7pH_24A"
+    GEMINI_FLASH_MODEL: str = "gemma-4-26b-a4b-it"
     # Pro model for Generators C-1/C-2 (deep theory + quiz content). Default is
     # gemini-2.5-pro (GA, retirement Oct 2026); newer previews such as
     # gemini-3.1-pro-preview can be swapped in via .env without code changes.
-    GEMINI_PRO_MODEL: str = "gemini-2.5-pro"
+    #GEMINI_PRO_MODEL: str = "gemini-2.5-pro"
 
     # Runtime environment: "development" (default) enables dev-only behavior
     # (skill-score override on POST /onboarding/roadmap/select, the dev-mode
@@ -60,9 +60,9 @@ class AppConfig(BaseSettings):
     C1_MIN_DIALOGUE_KEY_PHRASES: int = 1
 
     # Optional alternate LLM providers (OpenAI-compatible, used for rotation)
-    OpenRouter: str = ""
-    Groq: str = ""
-    Mistral: str = ""
+    OpenRouter: str = "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"
+    Groq: str = "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"
+    Mistral: str = "iJuJuZzg7deljF12T6UYqO6ygn0YT4Xw"
     Nvidia: str = ""
     HuggingFace: str = ""
     # Reserved but not wired into the rotation registry:

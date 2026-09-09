@@ -113,58 +113,196 @@ def retry_prompt_a(original_prompt: str, parse_error: str) -> str:
 
 NUM_TOPICS_PER_ROLE = 20
 
-PROMPT_B1_TEMPLATE = """[SYSTEM INSTRUCTION]
-You are an expert IT Curriculum Architect.
-Design a course outline of EXACTLY {num_topics} topics for the "{role}" role.
+PROMPT_B1_TEMPLATE = """You are an expert IT Curriculum Architect specializing in professional IT communication.
+
+Your task is to generate a course outline for the role "{role}".
+
+====================
+TASK
+====
+
+Generate EXACTLY {num_topics} unique IT communication topics.
+
+The topics must be directly relevant to:
+
+* The target role
+* The provided job description
+* The four communication skill categories
+* The provided seed data
+
+====================
+SKILL DEFINITIONS
+=================
 
 {skill_definitions_block}
 
-[REQUIRED EXACT DISTRIBUTION]
-You must generate EXACTLY {num_topics} topics total. Count carefully — each group must have EXACTLY the count listed below. Do NOT add extra topics.
+====================
+EXACT SKILL DISTRIBUTION
+========================
 
-Group 1 — D_doc: EXACTLY {d_count} topics
-Group 2 — C_comm: EXACTLY {c_count} topics
-Group 3 — T_trouble: EXACTLY {t_count} topics
-Group 4 — G_custom: EXACTLY {g_count} topics
-TOTAL: {d_count} + {c_count} + {t_count} + {g_count} = {num_topics}
+You MUST generate exactly the following number of topics:
 
-Stop immediately after the last G_custom topic. Do NOT generate any extra topics beyond the counts above.
+* D_doc: EXACTLY {d_count}
+* C_comm: EXACTLY {c_count}
+* T_trouble: EXACTLY {t_count}
+* G_custom: EXACTLY {g_count}
 
-[REQUIREMENTS]
-1. Output format: A single JSON array containing exactly {num_topics} inner arrays.
-2. Each inner array has EXACTLY 3 elements:
-   Index 0: Topic name (max 7 words). Use single quotes (') inside strings, never unescaped double quotes.
-   Index 1: Primary skill ("D_doc" | "C_comm" | "T_trouble" | "G_custom")
-   Index 2: Seed tier ("tier_1" | "tier_2"). Mix tier_1 and tier_2 within each skill group to achieve a ~50/50 balance.
-3. Content: Must address real IT communication scenarios for "{role}" using the job description. 
+TOTAL: EXACTLY {num_topics}
 
-[INPUT DATA]
-- Role: "{role}"
-- Job Description: "{job_description}"
-- Seed Tier 1 Data: "{seed_tier_1}"
-- Seed Tier 2 Data: "{seed_tier_2}"
+These counts are HARD CONSTRAINTS.
 
-[OUTPUT CONSTRAINT]
-- Output ONLY a raw, valid JSON array of exactly {num_topics} inner arrays.
-- NO markdown formatting (no ```json or ```).
-- NO conversational text.
-- Start directly with [ and end directly with ].
-- Do NOT add any topics beyond the exact counts listed above.
+Do not generate fewer or more topics for any skill.
 
-[EXAMPLE EXPECTED STRUCTURE]
+====================
+TIER DISTRIBUTION
+=================
+
+Each topic must have exactly one seed tier:
+
+* "tier_1"
+* "tier_2"
+
+For each skill group, distribute tier_1 and tier_2 as evenly as mathematically possible.
+
+If a skill group contains an even number of topics:
+
+* tier_1 count MUST equal tier_2 count.
+
+If a skill group contains an odd number of topics:
+
+* tier_1 and tier_2 counts may differ by at most 1.
+
+====================
+CONTENT REQUIREMENTS
+====================
+
+Every topic MUST:
+
+1. Represent a real and useful IT communication scenario.
+2. Be relevant to the "{role}" role.
+3. Be supported by the job description.
+4. Represent a distinct communication skill.
+5. Be specific enough to become a complete lesson module later.
+6. Avoid being a duplicate or near-duplicate of another topic.
+7. Avoid generic English-learning topics unless they are directly relevant to the IT role.
+8. Avoid topics that are purely technical tasks with no communication component.
+
+Examples of good topic concepts:
+
+* Drafting project requirements
+* Reporting production incidents
+* Explaining technical trade-offs
+* Clarifying ambiguous requirements
+* Presenting architecture decisions
+
+Avoid vague topics such as:
+
+* English Communication
+* IT Vocabulary
+* Communication Skills
+* General English
+
+====================
+INPUT DATA
+==========
+
+ROLE:
+{role}
+
+JOB DESCRIPTION:
+{job_description}
+
+SEED TIER 1 DATA:
+{seed_tier_1}
+
+SEED TIER 2 DATA:
+{seed_tier_2}
+
+Use the seed data as inspiration and coverage guidance.
+Do NOT simply copy the seed data.
+Generate original topics that fit the target role.
+
+====================
+OUTPUT FORMAT
+=============
+
+Return ONLY a valid JSON array.
+
+The JSON array MUST contain EXACTLY {num_topics} elements.
+
+Each element MUST be an array containing EXACTLY 3 strings:
+
 [
-  ["Drafting initial project requirements", "D_doc", "tier_1"],
-  ["Writing a complex BRD", "D_doc", "tier_2"],
-  ... ({d_count} D_doc topics total) ...
-  ["Facilitating daily standups", "C_comm", "tier_1"],
-  ... ({c_count} C_comm topics total) ...
-  ["Investigating production incidents", "T_trouble", "tier_1"],
-  ... ({t_count} T_trouble topics total) ...
-  ["Negotiating contract extensions", "G_custom", "tier_2"]
+["Topic name", "Primary skill", "Seed tier"],
+...
 ]
-Total: exactly {num_topics} topics. Do NOT add more.
-"""
 
+Element 0:
+
+* Topic name
+* Maximum 7 words
+
+Element 1:
+
+* MUST be exactly one of:
+  "D_doc"
+  "C_comm"
+  "T_trouble"
+  "G_custom"
+
+Element 2:
+
+* MUST be exactly one of:
+  "tier_1"
+  "tier_2"
+
+All strings MUST use standard JSON double quotes.
+
+Single quotes may appear normally inside string values.
+
+Do NOT use single quotes as JSON delimiters.
+
+====================
+ORDER
+=====
+
+Group the topics in this exact order:
+
+1. All D_doc topics
+2. All C_comm topics
+3. All T_trouble topics
+4. All G_custom topics
+
+Within each skill group, mix tier_1 and tier_2 topics as evenly as possible.
+
+====================
+FINAL VALIDATION BEFORE OUTPUT
+==============================
+
+Before producing the answer, internally verify ALL of the following:
+
+* Total topic count = EXACTLY {num_topics}
+* D_doc count = EXACTLY {d_count}
+* C_comm count = EXACTLY {c_count}
+* T_trouble count = EXACTLY {t_count}
+* G_custom count = EXACTLY {g_count}
+* Every element contains exactly 3 strings
+* Every topic name has at most 7 words
+* Every skill value is valid
+* Every tier value is valid
+* No duplicate or near-duplicate topics
+* Output is valid JSON
+* No text exists before or after the JSON array
+
+If any condition is not satisfied, correct the output before returning it.
+
+====================
+OUTPUT
+======
+
+Return ONLY the JSON array.
+Start with "[" and end with "]".
+"""
 
 def build_prompt_b1(
     *,
@@ -232,46 +370,168 @@ NUM_BASIC_PER_TOPIC = 2
 NUM_INTERMEDIATE_PER_TOPIC = 2
 NUM_ADVANCED_PER_TOPIC = 2
 
-PROMPT_B2_TEMPLATE = """[SYSTEM INSTRUCTION]
-You are an expert IT English Curriculum Designer.
-Break down the topic "{topic_name}" into EXACTLY {num_lessons} lesson titles for a "{role}" professional.
+PROMPT_B2_TEMPLATE = """You are an expert IT English Curriculum Designer.
+
+Your task is to break down the topic "{topic_name}" into EXACTLY {num_lessons} distinct lesson titles for a "{role}" professional.
+
+====================
+SKILL DEFINITIONS
+=================
 
 {skill_definitions_block}
 
-[OUTPUT CONSTRAINT]
-- Output ONLY a raw, valid JSON array of arrays.
-- NO markdown, NO backticks, NO conversational text.
-- Start directly with [ and end directly with ].
+====================
+INPUT
+=====
 
-[INPUT DATA]
-- Role: "{role}"
-- Topic: "{topic_name}"
-- Topic Primary Skill: "{topic_skill}"
-- Lesson Count: {num_lessons}
-- Distribution: {num_basic} basic, {num_inter} intermediate, {num_adv} advanced
+Role:
+{role}
 
-[REQUIREMENTS]
-1. Each inner array has EXACTLY 3 elements:
-   Index 0: Lesson title (max 7 words)
-   Index 1: Primary skill ("D_doc" | "C_comm" | "T_trouble" | "G_custom")
-   Index 2: Difficulty tier ("basic" | "intermediate" | "advanced")
+Topic:
+{topic_name}
 
-2. Order lessons from basic → intermediate → advanced.
-3. Primary skill should align with the topic's focus but can vary per lesson.
-4. **ADVANCED LESSON CONSTRAINT (CRITICAL):** The topic's **two** Advanced lessons (the 5th and 6th, the final lessons) MUST BOTH be tagged with the topic's own primary skill `"{topic_skill}"`. This makes the roadmap's lesson floors computable — Advanced-track users take exactly 2 lessons per topic, so a single topic fully satisfies their 2-lesson skill floor.
-5. Each lesson must be a distinct, actionable communication skill.
-6. CRITICAL: Use single quotes (') inside strings, never unescaped double quotes.
+Topic Primary Skill:
+{topic_skill}
 
-[EXAMPLE]
+Lesson Count:
+{num_lessons}
+
+====================
+HARD OUTPUT STRUCTURE
+=====================
+
+Return EXACTLY 6 lesson arrays.
+
+Each lesson array MUST contain EXACTLY 3 strings:
+
 [
-  ["Understanding Agile Principles", "D_doc", "basic"],
-  ["Refining Requirement Details", "D_doc", "basic"],
-  ["Leading Sprint Reviews", "C_comm", "intermediate"],
-  ["Reporting Blockers in Standups", "C_comm", "intermediate"],
-  ["Defending Architecture Decisions", "T_trouble", "advanced"],
-  ["Defusing Scope Disputes", "T_trouble", "advanced"]
+["Lesson title", "Primary skill", "Difficulty"],
+...
 ]
+
+The six lessons MUST have these exact difficulty positions:
+
+Lesson 1 → "basic"
+Lesson 2 → "basic"
+Lesson 3 → "intermediate"
+Lesson 4 → "intermediate"
+Lesson 5 → "advanced"
+Lesson 6 → "advanced"
+
+Lessons MUST appear in this exact order.
+
+====================
+ADVANCED SKILL CONSTRAINT
+=========================
+
+Lesson 5 MUST use the topic's primary skill:
+
+"{topic_skill}"
+
+Lesson 6 MUST use the topic's primary skill:
+
+"{topic_skill}"
+
+Therefore:
+
+Lesson 5:
+["...", "{topic_skill}", "advanced"]
+
+Lesson 6:
+["...", "{topic_skill}", "advanced"]
+
+This is a HARD CONSTRAINT.
+
+====================
+LESSON REQUIREMENTS
+===================
+
+Every lesson must:
+
+1. Be directly related to the topic.
+2. Be relevant to the "{role}" role.
+3. Represent a distinct communication skill.
+4. Be actionable and teachable.
+5. Progress in difficulty from basic to advanced.
+6. Have a title of no more than 7 words.
+7. Avoid duplicate or near-duplicate lessons.
+
+Basic lessons should introduce foundational communication skills.
+
+Intermediate lessons should require more contextual judgment and professional interaction.
+
+Advanced lessons should involve complex professional communication, ambiguity, negotiation, conflict, decision-making, or high-impact situations.
+
+The two advanced lessons MUST remain focused on the topic's own primary skill.
+
+====================
+PRIMARY SKILL
+=============
+
+Each lesson's primary skill MUST be one of:
+
+"D_doc"
+"C_comm"
+"T_trouble"
+"G_custom"
+
+Basic and intermediate lessons may use different skills when appropriate, but they must remain relevant to the topic.
+
+Advanced lessons MUST use "{topic_skill}".
+
+====================
+JSON REQUIREMENTS
+=================
+
+All strings MUST use standard JSON double quotes.
+
+Single quotes may appear normally inside string values.
+
+Do NOT use single quotes as JSON delimiters.
+
+Return raw JSON only.
+
+Do NOT return:
+
+* Markdown
+* ```json
+  ```
+* Explanations
+* Comments
+* Additional fields
+* Additional lessons
+
+====================
+FINAL VALIDATION
+================
+
+Before returning the answer, internally verify:
+
+* Exactly 6 lessons
+* Every lesson has exactly 3 elements
+* Lesson 1 = basic
+* Lesson 2 = basic
+* Lesson 3 = intermediate
+* Lesson 4 = intermediate
+* Lesson 5 = advanced
+* Lesson 6 = advanced
+* Lesson 5 skill = "{topic_skill}"
+* Lesson 6 skill = "{topic_skill}"
+* Every title <= 7 words
+* No duplicate lessons
+* Valid JSON
+* No text before or after JSON
+
+If any condition fails, fix it before returning the output.
+
+====================
+OUTPUT
+======
+
+Return ONLY the JSON array.
+Start with "[" and end with "]".
 """
+
 
 
 def build_prompt_b2(

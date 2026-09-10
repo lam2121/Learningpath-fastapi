@@ -11,11 +11,13 @@ engine = create_engine(
     pool_timeout=app_config.DB_POOL_TIMEOUT,
     pool_recycle=app_config.DB_POOL_RECYCLE,
     pool_pre_ping=True,
-    # Use READ COMMITTED to avoid InnoDB gap-lock deadlocks that occur
-    # under the default REPEATABLE READ when concurrent requests do
-    # DELETE+INSERT on the same table (e.g. user_roadmap recompute).
     connect_args={
-        "init_command": "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED",
+        "ssl": {
+            "ca": app_config.MYSQL_CA_CERT,
+        },
+        "init_command": (
+            "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED"
+        ),
     },
 )
 

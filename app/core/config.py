@@ -9,7 +9,7 @@ class AppConfig(BaseSettings):
     MYSQL_PASSWORD: str = ""
     MYSQL_DB: str = "toeic_learningpath"
     MYSQL_PORT: str = "3306"
-
+    MYSQL_CA_CERT: str = "./certs/ca.pem"
     # Connection pool settings
     DB_POOL_MIN_SIZE: int = 5
     DB_POOL_MAX_SIZE: int = 10

@@ -80,6 +80,8 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "https://english-practice.tma.com.vn",
         "https://localhost:8001",
+        "https://builtbylam.com",
+        "https://www.builtbylam.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],

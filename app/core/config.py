@@ -21,9 +21,9 @@ class AppConfig(BaseSettings):
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
-    AUTH_TOKEN_URL: str = "http://localhost:8001/api/auth/login"
-    AUTH_TOKEN_ISSUER: str = "https://english-practice.tma.com.vn/auth"
-    AUTH_TOKEN_AUDIENCE: str = "careerpath"
+    AUTH_TOKEN_URL: str = ""
+    AUTH_TOKEN_ISSUER: str = ""
+    AUTH_TOKEN_AUDIENCE: str = ""
 
     # The shared HS256 secret that the external auth-service signs JWTs with.
     # The backend must use the SAME secret to decode those tokens, otherwise

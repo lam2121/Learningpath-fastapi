@@ -400,11 +400,12 @@ def downgrade() -> None:
     op.drop_table('course')
     op.drop_index('fk_ai_usage_log_job_role_idx', table_name='ai_usage_log')
     op.drop_table('ai_usage_log')
+    # Drop job_role (and its foreign key to user.id) before dropping user
+    op.drop_table('job_role')
     op.drop_index('fk_user_role', table_name='user')
     op.drop_index('email', table_name='user')
     op.drop_table('user')
     op.drop_table('system_setting')
     op.drop_table('role')
     op.drop_table('quiz_type')
-    op.drop_table('job_role')
     # ### end Alembic commands ###

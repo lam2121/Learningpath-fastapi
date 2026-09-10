@@ -85,22 +85,23 @@ def _get_or_provision_user(payload: dict, db: Session) -> User:
     user_by_id = db.query(User).filter(User.id == user_id_int).first()
     user_by_email = db.query(User).filter(User.email == email).first()
 
-    if (
-        user_by_id is not None
-        and user_by_email is not None
-        and user_by_id.id != user_by_email.id
-    ):
+    if user_by_id is not None and user_by_id.email != email:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="CareerPath user mapping conflict for authenticated identity.",
+            detail="User ID already belongs to a different email address in CareerPath database.",
+        )
+
+    if user_by_email is not None and user_by_email.id != user_id_int:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email address is already mapped to a different user ID in CareerPath database.",
         )
 
     user = user_by_id or user_by_email
 
     if user is not None:
         needs_update = (
-            user.email != email
-            or user.role_id != role_id
+            user.role_id != role_id
             or (not user.name or user.name != display_name)
         )
         if not needs_update:
@@ -112,6 +113,18 @@ def _get_or_provision_user(payload: dict, db: Session) -> User:
     try:
         p_user_by_id = provision_db.query(User).filter(User.id == user_id_int).first()
         p_user_by_email = provision_db.query(User).filter(User.email == email).first()
+
+        if p_user_by_id is not None and p_user_by_id.email != email:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="User ID already belongs to a different email address in CareerPath database.",
+            )
+        if p_user_by_email is not None and p_user_by_email.id != user_id_int:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Email address is already mapped to a different user ID in CareerPath database.",
+            )
+
         p_user = p_user_by_id or p_user_by_email
 
         if p_user is None:
@@ -128,9 +141,6 @@ def _get_or_provision_user(payload: dict, db: Session) -> User:
             provision_db.commit()
         else:
             updated = False
-            if p_user.email != email:
-                p_user.email = email
-                updated = True
             if p_user.role_id != role_id:
                 p_user.role_id = role_id
                 updated = True

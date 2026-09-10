@@ -1,12 +1,15 @@
 import asyncio
 import json
 
-from fastapi import Cookie, APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import Cookie, APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from app.core.config import app_config
 from app.core.database import get_db
-from app.core.dependencies import get_current_user_optional, get_user_from_access_token
+from app.core.dependencies import get_current_user, get_current_user_optional, get_user_from_access_token
+from app.core.limiter import limiter
 from app.core.notification_stream import notification_stream_broker
+from app.core.redis import sync_delete_cache, sync_get_cache, sync_set_cache
 from app.core.roadmap import lesson_is_assigned
 from app.feature.onboarding.lesson_quiz_service import (
     evaluate_user_answer,
@@ -131,6 +134,8 @@ def finalize_placement_test(
             role_id=request.role_id,
             placement_test_answers=request.placement_test_answers,
         )
+        sync_delete_cache(f"careerpath:user:{user_id}:roadmap")
+        sync_delete_cache(f"careerpath:user:{user_id}:profile")
         _schedule_first_topic_lessons(background_tasks, db, user_id)
         return CompletePlacementTestResponse(
             message="Placement test completed and onboarding saved successfully",
@@ -296,7 +301,6 @@ def _require_unlocked_lesson(
     status_code=status.HTTP_200_OK,
 )
 def get_roadmap(
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_current_user_optional),
 ):
@@ -305,8 +309,18 @@ def get_roadmap(
     + assigned-lesson counts). Auto-computes the roadmap when it is empty.
     """
     user_id = _resolve_user_id(db, current_user)
+    cache_key = f"careerpath:user:{user_id}:roadmap"
+    cached = sync_get_cache(cache_key)
+    if cached is not None:
+        try:
+            if isinstance(cached, dict):
+                return RoadmapResponse.model_validate(cached)
+            return RoadmapResponse.model_validate_json(cached)
+        except Exception:
+            pass
+
     roadmap = get_user_roadmap(db, user_id)
-    _schedule_first_topic_lessons(background_tasks, db, user_id)
+    sync_set_cache(cache_key, roadmap.model_dump(mode="json"), ttl_seconds=300)
     return roadmap
 
 
@@ -385,6 +399,8 @@ def select_roadmap_endpoint(
       select, skipping placement answers. Returns 404 when APP_ENV=production.
     """
     user_id = _resolve_user_id(db, current_user)
+    sync_delete_cache(f"careerpath:user:{user_id}:roadmap")
+    sync_delete_cache(f"careerpath:user:{user_id}:profile")
     roadmap = recompute_roadmap(
         db, user_id, skills=request.skills, role_id=request.role_id
     )
@@ -461,13 +477,16 @@ def submit_lesson_quiz_endpoint(
     user_id = _resolve_user_id(db, current_user)
     lesson = _get_owned_assigned_lesson(db, user_id, lesson_id)
     _require_unlocked_lesson(db, user_id, lesson)
-    return submit_lesson_quiz(
+    res = submit_lesson_quiz(
         db,
         user_id,
         lesson,
         question_order=request.question_order,
         submitted_answers=[answer.model_dump() for answer in request.answers],
     )
+    sync_delete_cache(f"careerpath:user:{user_id}:roadmap")
+    sync_delete_cache(f"careerpath:user:{user_id}:profile")
+    return res
 
 
 @router.get(
@@ -491,19 +510,23 @@ def get_lesson_quiz_result_detail_endpoint(
     response_model=EvaluateAnswerResponse,
     status_code=status.HTTP_200_OK,
 )
+@limiter.limit("15/minute")
 async def evaluate_answer_endpoint(
-    request: EvaluateAnswerRequest,
+    request: Request,
+    body: EvaluateAnswerRequest,
+    current_user: User = Depends(get_current_user),
 ):
     """
     Evaluate a user's free-text answer (for Reading, Dialogue, or Listening) using the AI.
     """
+    _ = current_user
     try:
         feedback = await evaluate_user_answer(
-            section_type=request.section_type,
-            context=request.context,
-            question=request.question,
-            reference_answer=request.reference_answer,
-            user_answer=request.user_answer,
+            section_type=body.section_type,
+            context=body.context,
+            question=body.question,
+            reference_answer=body.reference_answer,
+            user_answer=body.user_answer,
         )
         return EvaluateAnswerResponse(feedback_summary=feedback)
     except ValueError as e:
@@ -556,12 +579,15 @@ def submit_topic_quiz_endpoint(
     current_user: User | None = Depends(get_current_user_optional),
 ):
     user_id = _resolve_user_id(db, current_user)
-    return submit_topic_quiz(
+    res = submit_topic_quiz(
         db,
         user_id,
         topic_id,
         submitted_answers=[ans.model_dump() for ans in request.answers],
     )
+    sync_delete_cache(f"careerpath:user:{user_id}:roadmap")
+    sync_delete_cache(f"careerpath:user:{user_id}:profile")
+    return res
 
 
 @router.get(
@@ -602,11 +628,14 @@ def submit_final_quiz_endpoint(
     current_user: User | None = Depends(get_current_user_optional),
 ):
     user_id = _resolve_user_id(db, current_user)
-    return submit_final_quiz(
+    res = submit_final_quiz(
         db,
         user_id,
         submitted_answers=request.answers,
     )
+    sync_delete_cache(f"careerpath:user:{user_id}:roadmap")
+    sync_delete_cache(f"careerpath:user:{user_id}:profile")
+    return res
 
 
 @router.post(
@@ -618,6 +647,12 @@ def dev_unlock_final_quiz_endpoint(
     current_user: User | None = Depends(get_current_user_optional),
 ):
     """Dev helper to instantly mark all roadmap topic quizzes as passed."""
+    if app_config.APP_ENV.lower() == "production":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dev endpoints are disabled in production.",
+        )
+
     from datetime import datetime
     from app.models.user_topic_quiz import UserTopicQuiz
     from app.feature.onboarding.final_quiz_service import get_or_create_user_course

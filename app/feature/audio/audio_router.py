@@ -1,8 +1,7 @@
 import logging
 from fastapi import APIRouter, Depends, File, Form, HTTPException,Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+from app.core.limiter import limiter
 
 from app.feature.audio.audio_schema import (
     STTResponse,
@@ -22,8 +21,7 @@ from app.core.dependencies import get_current_user
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Khởi tạo bộ giới hạn tốc độ (Rate Limiter)
-limiter = Limiter(key_func=get_remote_address)
+
 
 # Giới hạn kích thước file âm thanh tối đa (Ví dụ: 10 MB) để tránh tràn bộ nhớ RAM (OOM)
 MAX_AUDIO_FILE_SIZE = 10 * 1024 * 1024 

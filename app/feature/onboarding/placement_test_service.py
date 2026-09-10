@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import app_config
 from app.core.notification_stream import notification_stream_broker
+from app.core.redis import sync_get_cache, sync_set_cache
 from app.core.roadmap import (
     SKILLS,
     assigned_lessons,
@@ -75,7 +76,16 @@ def fetch_questions_by_role(
     """
     Fetch all placement_test_question rows for a given job_role_id.
     Parses the JSON `question` column and returns structured response objects.
+    Cached in Redis for 600s with graceful DB fallback.
     """
+    cache_key = f"careerpath:placement:role:{role_id}:questions"
+    cached = sync_get_cache(cache_key)
+    if cached and isinstance(cached, list):
+        try:
+            return [PlacementTestQuestionResponse.model_validate(q) for q in cached]
+        except Exception:
+            pass
+
     records = (
         db.query(PlacementTestQuestion)
         .filter(PlacementTestQuestion.job_role_id == role_id)
@@ -127,6 +137,9 @@ def fetch_questions_by_role(
                 expanded_skill=record.expanded_skill,
             )
         )
+
+    if results:
+        sync_set_cache(cache_key, [r.model_dump(mode="json") for r in results], ttl_seconds=600)
 
     return results
 

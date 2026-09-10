@@ -13,10 +13,13 @@ class AppConfig(BaseSettings):
     # Connection pool settings
     DB_POOL_MIN_SIZE: int = 5
     DB_POOL_MAX_SIZE: int = 10
-    DB_MAX_OVERFLOW: int = 30
+    DB_MAX_OVERFLOW: int = 5
     DB_POOL_TIMEOUT: int = 15
     DB_CONNECT_TIMEOUT: int = 30
     DB_POOL_RECYCLE: int = 1800
+
+    # Redis configuration for multi-worker SSE Pub/Sub, rate limiting, and caching
+    REDIS_URL: str = ""
 
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
@@ -30,9 +33,9 @@ class AppConfig(BaseSettings):
     # every authenticated request fails and users are never provisioned into
     # toeic_learningpath.user. This is a document-only reference for the guard
     # below; override via AUTH_SHARED_SECRET if it ever changes.
-    AUTH_SHARED_SECRET: str = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
+    AUTH_SHARED_SECRET: str = ""
 
-    GEMINI_API_KEY: str = "AQ.Ab8RN6LGGkS15u1wmcqZSgJXruR3ZUvO3uwkaU9Fyij7pH_24A"
+    GEMINI_API_KEY: str = ""
     GEMINI_FLASH_MODEL: str = "gemma-4-26b-a4b-it"
     # Pro model for Generators C-1/C-2 (deep theory + quiz content). Default is
     # gemini-2.5-pro (GA, retirement Oct 2026); newer previews such as
@@ -60,9 +63,9 @@ class AppConfig(BaseSettings):
     C1_MIN_DIALOGUE_KEY_PHRASES: int = 1
 
     # Optional alternate LLM providers (OpenAI-compatible, used for rotation)
-    OpenRouter: str = "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"
-    Groq: str = "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"
-    Mistral: str = "iJuJuZzg7deljF12T6UYqO6ygn0YT4Xw"
+    OpenRouter: str = ""
+    Groq: str = ""
+    Mistral: str = ""
     Nvidia: str = ""
     HuggingFace: str = ""
     # Reserved but not wired into the rotation registry:

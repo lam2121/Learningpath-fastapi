@@ -10,6 +10,7 @@ except ImportError:
 from typing import Any
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.ai.gemini import GeminiClientPool
@@ -183,17 +184,24 @@ def submit_lesson_quiz(
     )
     current_attempt_passed = weighted_score_percent >= LESSON_PASS_THRESHOLD_PERCENT
 
-    user_lesson = _get_user_lesson(db, user_id, lesson.id)
+    user_lesson = _get_user_lesson(db, user_id, lesson.id, for_update=True)
     if user_lesson is None:
-        user_lesson = UserLesson(
-            user_id=user_id,
-            lesson_id=lesson.id,
-            attempt_count=0,
-            failed_attempts=0,
-            user_answers={},
-            status="in_progress",
-        )
-        db.add(user_lesson)
+        try:
+            with db.begin_nested():
+                user_lesson = UserLesson(
+                    user_id=user_id,
+                    lesson_id=lesson.id,
+                    attempt_count=0,
+                    failed_attempts=0,
+                    user_answers={},
+                    status="in_progress",
+                )
+                db.add(user_lesson)
+                db.flush()
+        except IntegrityError:
+            user_lesson = _get_user_lesson(db, user_id, lesson.id, for_update=True)
+            if user_lesson is None:
+                raise
 
     saved_state = _coerce_json_object(user_lesson.user_answers)
     attempt_count = user_lesson.attempt_count + 1
@@ -623,13 +631,17 @@ def _coerce_json_object(value: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _get_user_lesson(db: Session, user_id: int, lesson_id: int) -> UserLesson | None:
-    return (
+def _get_user_lesson(
+    db: Session, user_id: int, lesson_id: int, *, for_update: bool = False
+) -> UserLesson | None:
+    query = (
         db.query(UserLesson)
         .filter(UserLesson.user_id == user_id, UserLesson.lesson_id == lesson_id)
         .order_by(UserLesson.id.asc())
-        .first()
     )
+    if for_update:
+        query = query.with_for_update()
+    return query.first()
 
 
 def _record_wrong_answer_in_queue(

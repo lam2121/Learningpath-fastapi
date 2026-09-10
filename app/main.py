@@ -4,10 +4,11 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from slowapi.util import get_remote_address
+
+from app.core.limiter import limiter
 
 from app.api_router import api_router
 from app.core.config import app_config
@@ -50,11 +51,11 @@ async def lifespan(application: FastAPI):
     clean_audio_cache()
     notification_stream_broker.attach_loop()
     yield
+    await notification_stream_broker.close()
 
 
 
-# 1. Khởi tạo Limiter toàn cục
-limiter = Limiter(key_func=get_remote_address)
+# 1. Khởi tạo Limiter toàn cục (sử dụng shared limiter kết nối Redis)
 
 app = FastAPI(title="TOEIC Learning Path API", lifespan=lifespan)
 
@@ -78,7 +79,6 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "https://english-practice.tma.com.vn",
         "https://localhost:8001",
         "https://builtbylam.com",
         "https://www.builtbylam.com",

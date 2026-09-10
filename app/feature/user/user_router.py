@@ -7,11 +7,19 @@ from sqlalchemy.orm import Session
 
 from app.core.ai.gemini import GeminiClientPool
 from app.core.ai.prompts import PROMPT_E1_TEMPLATE
+from app.core.config import app_config
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.core.roadmap import lesson_is_assigned
-from app.core.ai.gemini import GeminiClientPool
-from app.core.ai.prompts import PROMPT_E1_TEMPLATE
+
+from app.core.redis import sync_delete_cache, sync_get_cache, sync_set_cache
+
+
+def _invalidate_profile_cache(user_id: int) -> None:
+    sync_delete_cache(f"careerpath:user:{user_id}:profile")
+    sync_delete_cache(f"careerpath:user:{user_id}:roadmap")
+    sync_delete_cache(f"user_profile:{user_id}")
+
 from app.feature.onboarding.lesson_quiz_scoring import LESSON_PASS_THRESHOLD_PERCENT
 from app.feature.user.quiz_review_service import (
     get_user_quiz_review_items,
@@ -246,44 +254,10 @@ def _build_skill_score_snapshots(
     return initial_scores, current_scores
 
 
-def _build_study_history(db: Session, user_id: int) -> tuple[int, list[dict[str, object]]]:
-    completed_lessons = (
-        db.query(UserLesson.completed_at, Lesson.estimated_minutes)
-        .join(Lesson, Lesson.id == UserLesson.lesson_id)
-        .filter(
-            UserLesson.user_id == user_id,
-            UserLesson.status == "completed",
-            UserLesson.completed_at.isnot(None),
-        )
-        .all()
-    )
-
-    total_studied_minutes = 0
-    monthly_minutes: dict[date, int] = {}
-    today = date.today()
-
-    for completed_at, estimated_minutes in completed_lessons:
-        minutes = max(0, estimated_minutes or 0)
-        if minutes <= 0 or completed_at is None:
-            continue
-
-        total_studied_minutes += minutes
-        completed_on = completed_at.date()
-
-        if completed_on.year == today.year and completed_on.month == today.month:
-            monthly_minutes[completed_on] = monthly_minutes.get(completed_on, 0) + minutes
-
-    study_history = [
-        {"studied_on": studied_on, "minutes": minutes}
-        for studied_on, minutes in sorted(monthly_minutes.items())
-    ]
-
-    return total_studied_minutes, study_history
-
-
-def _build_lesson_quiz_history(
+def _build_lesson_quiz_and_study_history(
     db: Session, user_id: int
-) -> list[LessonQuizHistoryEntryResponse]:
+) -> tuple[int, list[dict[str, object]], list[LessonQuizHistoryEntryResponse]]:
+    """Consolidated single-query builder for both study history and lesson quiz history."""
     rows = (
         db.query(UserLesson, Lesson, Topic, UserRoadmap)
         .join(Lesson, Lesson.id == UserLesson.lesson_id)
@@ -297,6 +271,98 @@ def _build_lesson_quiz_history(
         .order_by(UserLesson.completed_at.desc(), UserLesson.id.desc())
         .all()
     )
+
+    history: list[LessonQuizHistoryEntryResponse] = []
+    total_studied_minutes = 0
+    monthly_minutes: dict[date, int] = {}
+    today = date.today()
+
+    for user_lesson, lesson, topic, user_roadmap in rows:
+        if user_lesson.status == "completed" and user_lesson.completed_at is not None:
+            minutes = max(0, lesson.estimated_minutes or 0)
+            if minutes > 0:
+                total_studied_minutes += minutes
+                completed_on = user_lesson.completed_at.date()
+                if completed_on.year == today.year and completed_on.month == today.month:
+                    monthly_minutes[completed_on] = monthly_minutes.get(completed_on, 0) + minutes
+
+        saved_state = _coerce_json_object(user_lesson.user_answers)
+        best_attempt = _extract_best_passing_attempt(saved_state)
+        best_score_percent = _extract_best_passing_score(saved_state, user_lesson.progress)
+        latest_attempt = _extract_latest_attempt(saved_state)
+        (
+            correct_no_hint_count,
+            total_no_hint_questions,
+            correct_with_hint_count,
+            total_with_hint_questions,
+            total_questions,
+        ) = _compute_hint_breakdown(best_attempt)
+        attempt_count = user_lesson.attempt_count
+        failed_attempts = user_lesson.failed_attempts
+        recorded_at = (
+            user_lesson.completed_at
+            or _parse_iso_datetime(best_attempt.get("submitted_at"))
+            or _parse_iso_datetime(latest_attempt.get("submitted_at"))
+        )
+
+        history.append(
+            LessonQuizHistoryEntryResponse(
+                lesson_id=lesson.id,
+                lesson_title=lesson.title,
+                topic_name=topic.name if topic else None,
+                topic_sort_order=(
+                    (user_roadmap.sort_order + 1) if user_roadmap is not None else None
+                ),
+                skill=lesson.primary_skill,
+                difficulty_tier=lesson.difficulty_tier,
+                status=_derive_lesson_quiz_status(
+                    user_lesson,
+                    best_attempt=best_attempt,
+                    latest_attempt=latest_attempt,
+                ),
+                best_score_percent=best_score_percent,
+                passed=bool(user_lesson.completed_at is not None),
+                attempt_count=int(attempt_count or 0),
+                failed_attempts=int(failed_attempts or 0),
+                correct_no_hint_count=int(correct_no_hint_count or 0),
+                total_no_hint_questions=int(total_no_hint_questions or 0),
+                correct_with_hint_count=int(correct_with_hint_count or 0),
+                total_with_hint_questions=int(total_with_hint_questions or 0),
+                total_questions=int(total_questions or 0),
+                recorded_at=recorded_at,
+                completed_at=user_lesson.completed_at,
+                last_submitted_at=_parse_iso_datetime(
+                    (latest_attempt or best_attempt).get("submitted_at")
+                ),
+            )
+        )
+
+    history.sort(
+        key=lambda entry: (
+            entry.completed_at or entry.last_submitted_at or datetime.min,
+            entry.best_score_percent or 0.0,
+        ),
+        reverse=True,
+    )
+
+    study_history = [
+        {"studied_on": studied_on, "minutes": minutes}
+        for studied_on, minutes in sorted(monthly_minutes.items())
+    ]
+
+    return total_studied_minutes, study_history, history
+
+
+def _build_study_history(db: Session, user_id: int) -> tuple[int, list[dict[str, object]]]:
+    total_studied_minutes, study_history, _ = _build_lesson_quiz_and_study_history(db, user_id)
+    return total_studied_minutes, study_history
+
+
+def _build_lesson_quiz_history(
+    db: Session, user_id: int
+) -> list[LessonQuizHistoryEntryResponse]:
+    _, _, history = _build_lesson_quiz_and_study_history(db, user_id)
+    return history
 
     history: list[LessonQuizHistoryEntryResponse] = []
 
@@ -588,8 +654,9 @@ def _build_user_profile_response(db: Session, user: User) -> UserProfileResponse
         )
 
     daily_study_minutes = user.daily_study_minutes or DEFAULT_DAILY_STUDY_MINUTES
-    total_studied_minutes, study_history = _build_study_history(db, user.id)
-    lesson_quiz_history = _build_lesson_quiz_history(db, user.id)
+    total_studied_minutes, study_history, lesson_quiz_history = (
+        _build_lesson_quiz_and_study_history(db, user.id)
+    )
     topic_quiz_history = _build_topic_quiz_history(db, user.id)
     final_quiz_history = _build_final_quiz_history(db, user.id, user)
     initial_skill_scores, current_skill_scores = _build_skill_score_snapshots(
@@ -657,6 +724,7 @@ def _reset_user_career_track(db: Session, user: User) -> None:
         user.learning_status = LEARNING_NONE
         db.add(user)
         db.commit()
+        _invalidate_profile_cache(user.id)
     except Exception as exc:
         db.rollback()
         raise HTTPException(
@@ -669,7 +737,19 @@ def _reset_user_career_track(db: Session, user: User) -> None:
 def get_user_profile(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    return _build_user_profile_response(db, current_user)
+    cache_key = f"careerpath:user:{current_user.id}:profile"
+    cached = sync_get_cache(cache_key)
+    if cached is not None:
+        try:
+            if isinstance(cached, dict):
+                return UserProfileResponse.model_validate(cached)
+            return UserProfileResponse.model_validate_json(cached)
+        except Exception:
+            pass
+
+    response = _build_user_profile_response(db, current_user)
+    sync_set_cache(cache_key, response.model_dump(mode="json"), ttl_seconds=60)
+    return response
 
 
 @router.patch("/me/study-settings", response_model=UserProfileResponse)
@@ -682,6 +762,7 @@ def update_study_settings(
     db.add(current_user)
     db.commit()
     db.refresh(current_user)
+    _invalidate_profile_cache(current_user.id)
     return _build_user_profile_response(db, current_user)
 
 
@@ -691,6 +772,7 @@ def delete_career_track(
     db: Session = Depends(get_db),
 ):
     _reset_user_career_track(db, current_user)
+    _invalidate_profile_cache(current_user.id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

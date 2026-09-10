@@ -8,6 +8,7 @@ from app.models.lesson import Lesson
 from app.models.user_topic_quiz import UserTopicQuiz
 from app.models.topic import Topic
 from app.models.user_course import UserCourse
+from app.models.user_roadmap import UserRoadmap
 from app.feature.onboarding.lesson_quiz_scoring import (
     compute_radar_score_for_skill,
     PLACEMENT_EVIDENCE_WEIGHT,
@@ -95,10 +96,15 @@ def update_user_radar_score(db: Session, user_id: int) -> UserRadarScore | None:
         if score is not None and score > 0:
             lesson_performances[skill].append(round(score, 2))
 
-    # Pre-cache lesson -> primary_skill mapping for question skill resolution
-    lesson_skills = dict(
-        db.query(Lesson.id, Lesson.primary_skill).all()
+    # Pre-cache lesson -> primary_skill mapping scoped to the user's roadmap & completed lessons
+    lesson_skills = {lesson.id: lesson.primary_skill for _, lesson in completed_lessons}
+    roadmap_lessons = (
+        db.query(Lesson.id, Lesson.primary_skill)
+        .join(UserRoadmap, UserRoadmap.topic_id == Lesson.topic_id)
+        .filter(UserRoadmap.user_id == user_id)
+        .all()
     )
+    lesson_skills.update(dict(roadmap_lessons))
 
     # 2. Topic quiz performances (first passing attempt of each topic)
     topic_performances: dict[str, list[float]] = {sk: [] for sk in SKILLS}

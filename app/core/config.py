@@ -21,9 +21,9 @@ class AppConfig(BaseSettings):
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
-    AUTH_TOKEN_URL: str = ""
-    AUTH_TOKEN_ISSUER: str = ""
-    AUTH_TOKEN_AUDIENCE: str = ""
+    AUTH_TOKEN_URL: str = "https://auth.builtbylam.com/api/auth/login"
+    AUTH_TOKEN_ISSUER: str = "https://api.builtbylam.com"
+    AUTH_TOKEN_AUDIENCE: str = "careerpath"
 
     # The shared HS256 secret that the external auth-service signs JWTs with.
     # The backend must use the SAME secret to decode those tokens, otherwise

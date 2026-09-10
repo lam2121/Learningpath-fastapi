@@ -40,8 +40,7 @@ def _decode_auth_service_access_token(token: str) -> dict:
             token,
             app_config.SECRET_KEY,
             algorithms=[app_config.ALGORITHM],
-            issuer=app_config.AUTH_TOKEN_ISSUER,
-            audience=app_config.AUTH_TOKEN_AUDIENCE,
+            options={"verify_aud": False, "verify_issuer": False},
         )
     except JWTError as exc:
         raise _credentials_exception() from exc

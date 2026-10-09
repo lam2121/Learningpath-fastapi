@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.infra.database import get_db
 from app.feature.onboarding.job_role_schema import JobRoleResponse
 from app.feature.onboarding.job_role_service import fetch_all_active_job_roles
 

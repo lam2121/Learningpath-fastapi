@@ -23,20 +23,21 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from sqlalchemy.orm.attributes import flag_modified
-from app.core.database import SessionLocal
-from app.models.course import Course
+from app.core.infra.database import SessionLocal
 from app.models.lesson import Lesson
 from app.models.topic import Topic
 from app.models.user import User
-from app.models.user_course import UserCourse
+from app.models.job_role import JobRole
+from app.models.user_final_quiz import UserFinalQuiz
 from app.models.user_roadmap import UserRoadmap
 from app.models.user_topic_quiz import UserTopicQuiz
-from app.feature.onboarding.final_quiz_service import (
+from app.feature.quiz.final_quiz_service import (
     SKILLS,
     SKILL_LABELS,
     _extract_lesson_quiz_questions,
+    get_or_create_user_final_quiz,
 )
-from app.feature.onboarding.radar_service import update_user_radar_score
+from app.feature.radar.radar_service import update_user_radar_score
 
 
 def get_target_user(db, target: str | None) -> User | None:
@@ -61,7 +62,6 @@ def get_target_user(db, target: str | None) -> User | None:
 def build_final_quiz_attempt(
     db,
     user_id: int,
-    course_name: str,
     score: float,
     attempt_count: int,
 ) -> dict:
@@ -230,50 +230,25 @@ def complete_final_quiz(
                     tq.weakest_lesson_ids = []
             print(f"  ✓ All topic quizzes confirmed as 'passed'.")
 
-        # 2. Locate or create user_course
-        course = None
-        if user.job_role_id:
-            course = db.query(Course).filter(Course.job_role_id == user.job_role_id).first()
-        if not course:
-            course = db.query(Course).first()
-
-        if not course:
-            print(f"❌ Error: No course found in database.")
+        # 2. Locate or create the user's final-quiz record (resolved by job role)
+        user_course = get_or_create_user_final_quiz(db, user.id, create_if_missing=True)
+        if user_course is None:
+            print("❌ Error: User has no job role assigned, so there is no final quiz.")
             return
 
-        user_course = (
-            db.query(UserCourse)
-            .filter(UserCourse.user_id == user.id, UserCourse.course_id == course.id)
-            .first()
-        )
+        role = db.query(JobRole).filter(JobRole.id == user_course.job_role_id).first()
+        role_name = role.name if role else f"Role {user_course.job_role_id}"
 
-        attempt_count = 1
-        if user_course is None:
-            user_course = UserCourse(
-                user_id=user.id,
-                course_id=course.id,
-                status="passed",
-                attempt_count=1,
-                failed_attempts=0,
-                best_score_percent=score,
-                last_score_percent=score,
-                progress=100.0,
-                unlocked_at=now,
-                completed_at=now,
-            )
-            db.add(user_course)
-            db.flush()
-        else:
-            attempt_count = max(user_course.attempt_count + 1, 1)
-            user_course.status = "passed"
-            user_course.attempt_count = attempt_count
-            user_course.failed_attempts = 0
-            user_course.best_score_percent = max(user_course.best_score_percent or 0.0, score)
-            user_course.last_score_percent = score
-            user_course.progress = 100.0
-            user_course.completed_at = now
-            if not user_course.unlocked_at:
-                user_course.unlocked_at = now
+        attempt_count = max((user_course.attempt_count or 0) + 1, 1)
+        user_course.status = "passed"
+        user_course.attempt_count = attempt_count
+        user_course.failed_attempts = 0
+        user_course.best_score_percent = max(user_course.best_score_percent or 0.0, score)
+        user_course.last_score_percent = score
+        user_course.progress = 100.0
+        user_course.completed_at = now
+        if not user_course.unlocked_at:
+            user_course.unlocked_at = now
 
         user_course.weakest_lesson_ids = []
         user_course.skill_scores = {
@@ -282,7 +257,7 @@ def complete_final_quiz(
 
         # 3. Build passing latest_attempt payload for the frontend FinalQuizEngine
         attempt_payload = build_final_quiz_attempt(
-            db, user.id, course.name, score, attempt_count
+            db, user.id, score, attempt_count
         )
 
         existing_answers = user_course.user_answers if isinstance(user_course.user_answers, dict) else {}
@@ -304,7 +279,7 @@ def complete_final_quiz(
             print(f"  ✓ Radar scores updated for user ID {user.id}: {updated_radar.current_vector}")
 
         print(f"\n🎓 GRADUATION QUIZ SUCCESSFULLY COMPLETED & PASSED!")
-        print(f"  Course: ID {course.id} - '{course.name}'")
+        print(f"  Job Role: ID {user_course.job_role_id} - '{role_name}'")
         print(f"  Overall Score: {score}% (Passing Threshold: 80%)")
         print(f"  Skill Breakdown (all >= 60% requirement met):")
         for sk in SKILLS:

@@ -1,7 +1,7 @@
 from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, text
 from sqlalchemy.dialects.mysql import BIGINT
 
-from app.core.database import Base
+from app.core.infra.database import Base
 
 
 class RoleGeneration(Base):

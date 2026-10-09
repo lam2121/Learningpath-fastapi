@@ -18,3 +18,9 @@ edge-tts
 aiofiles
 slowapi
 redis>=5.0.0
+jsonschema>=4.20.0
+
+# Lightweight text-processing dependencies for furigana and Japanese enrichment
+sudachipy==0.7.0
+sudachiDict-core==20260723.1
+pykakasi==2.3.0

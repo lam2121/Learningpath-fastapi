@@ -1,9 +1,7 @@
 from fastapi import Depends, HTTPException, status
 
-from app.core.dependencies import get_current_user
-from app.models.user import User
-
-ADMIN_ROLE_ID = 2
+from app.core.infra.dependencies import get_current_user
+from app.models.user import ADMIN_ROLE_ID, User
 
 
 def get_current_admin(current_user: User = Depends(get_current_user)) -> User:

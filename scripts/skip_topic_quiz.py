@@ -23,19 +23,20 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from sqlalchemy.orm.attributes import flag_modified
-from app.core.database import SessionLocal
-from app.models.course import Course
+from app.core.infra.database import SessionLocal
 from app.models.lesson import Lesson
 from app.models.topic import Topic
 from app.models.user import User
-from app.models.user_course import UserCourse
+from app.models.job_role import JobRole
+from app.models.user_final_quiz import UserFinalQuiz
 from app.models.user_roadmap import UserRoadmap
 from app.models.user_topic_quiz import UserTopicQuiz
-from app.feature.onboarding.topic_quiz_service import (
+from app.feature.quiz.final_quiz_service import get_or_create_user_final_quiz
+from app.feature.quiz.topic_quiz_service import (
     TOPIC_QUIZ_PASS_THRESHOLD_PERCENT,
     _extract_lesson_quiz_questions,
 )
-from app.feature.onboarding.radar_service import update_user_radar_score
+from app.feature.radar.radar_service import update_user_radar_score
 
 
 def get_target_user(db, target: str | None) -> User | None:
@@ -67,6 +68,9 @@ def build_passed_topic_attempt(
 ) -> dict:
     """Construct a full passing latest_attempt payload for the frontend TopicQuizEngine."""
     assigned_lessons = db.query(Lesson).filter(Lesson.topic_id == topic_id).all()
+    # Used below to tag a question with its lesson's skill when the extracted
+    # question does not carry one. Was referenced but never defined.
+    lesson_skill_map = {lesson.id: lesson.primary_skill for lesson in assigned_lessons}
     pool: list[dict] = []
     for l in assigned_lessons:
         pool.extend(_extract_lesson_quiz_questions(l))
@@ -264,46 +268,30 @@ def skip_topic_quiz(
         all_passed = set(roadmap_topic_ids).issubset(passed_topic_ids)
 
         if all_passed:
-            # Unlock the Final Course Quiz
-            course = None
-            if user.job_role_id:
-                course = db.query(Course).filter(Course.job_role_id == user.job_role_id).first()
-            if not course:
-                course = db.query(Course).first()
-
-            if course:
-                uc = (
-                    db.query(UserCourse)
-                    .filter(UserCourse.user_id == user.id, UserCourse.course_id == course.id)
-                    .first()
+            # Unlock the Final Course Quiz. get_or_create_user_final_quiz resolves
+            # the record from the user's job role and creates it when missing.
+            uc = get_or_create_user_final_quiz(db, user.id, create_if_missing=True)
+            if uc is None:
+                print(
+                    "\n⚠️ All topics passed, but the user has no job role assigned, "
+                    "so there is no final quiz to unlock."
                 )
-                if uc is None:
-                    uc = UserCourse(
-                        user_id=user.id,
-                        course_id=course.id,
-                        status="ready",
-                        attempt_count=0,
-                        failed_attempts=0,
-                        best_score_percent=0.0,
-                        last_score_percent=0.0,
-                        unlocked_at=now,
-                        user_answers={"active_questions": None},
-                    )
-                    db.add(uc)
-                else:
-                    if uc.status == "locked":
-                        uc.status = "ready"
-                    if not uc.unlocked_at:
-                        uc.unlocked_at = now
-                    # Clear active questions to guarantee fresh load
-                    ua = uc.user_answers if isinstance(uc.user_answers, dict) else {}
-                    ua["active_questions"] = None
-                    uc.user_answers = ua
-                    flag_modified(uc, "user_answers")
+            else:
+                role = db.query(JobRole).filter(JobRole.id == uc.job_role_id).first()
+                role_name = role.name if role else f"Role {uc.job_role_id}"
+                if uc.status == "locked":
+                    uc.status = "ready"
+                if not uc.unlocked_at:
+                    uc.unlocked_at = now
+                # Clear active questions to guarantee fresh load
+                ua = uc.user_answers if isinstance(uc.user_answers, dict) else {}
+                ua["active_questions"] = None
+                uc.user_answers = ua
+                flag_modified(uc, "user_answers")
 
                 print(f"\n🎉 ALL {len(roadmap_topic_ids)} TOPIC QUIZZES ARE NOW PASSED!")
-                print(f"  ✓ Final Course Quiz unlocked and marked 'ready' for Course ID {course.id} ('{course.name}').")
-                print(f"  Learner can now take the Final Course Quiz at: /quiz/final/course")
+                print(f"  ✓ Final Course Quiz unlocked and marked 'ready' for Job Role ID {uc.job_role_id} ('{role_name}').")
+                print("  Learner can now take the Final Course Quiz from the roadmap.")
 
         db.commit()
 

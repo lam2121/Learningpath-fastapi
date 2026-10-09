@@ -1,7 +1,7 @@
 from sqlalchemy import JSON, Boolean, Column, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.mysql import BIGINT
 
-from app.core.database import Base
+from app.core.infra.database import Base
 
 
 class Lesson(Base):
@@ -27,4 +27,4 @@ class Lesson(Base):
     estimated_minutes = Column(Integer, nullable=True)
     theory_content = Column(JSON, nullable=True)  # NULL until lazily generated (C-1)
     quiz_content = Column(JSON, nullable=True)  # NULL until lazily generated (C-2)
-    is_generated = Column(Boolean, nullable=False, server_default="0")
+    is_generated = Column( Integer, nullable=False, server_default="0", comment="-1 = failed | 0 = pending | 1 = completed",)

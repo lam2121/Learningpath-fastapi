@@ -3,7 +3,7 @@ from typing import ClassVar
 from sqlalchemy import Column, DateTime, String, text
 from sqlalchemy.dialects.mysql import BIGINT
 
-from app.core.database import Base
+from app.core.infra.database import Base
 
 
 class Role(Base):

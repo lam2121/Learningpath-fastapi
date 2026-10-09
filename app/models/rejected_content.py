@@ -1,7 +1,7 @@
 from sqlalchemy import JSON, Column, DateTime, ForeignKey, Index, String, text
 from sqlalchemy.dialects.mysql import BIGINT, LONGTEXT
 
-from app.core.database import Base
+from app.core.infra.database import Base
 
 
 class RejectedContent(Base):

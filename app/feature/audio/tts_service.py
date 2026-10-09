@@ -1,27 +1,33 @@
 import hashlib
 import logging
+import os
 import ssl
+import tempfile
 import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
+import os
+import uuid
+
 import aiofiles
+import anyio
 import edge_tts
 import edge_tts.communicate
 
-from app.core.config import app_config
+from app.core.infra.config import app_config
 from app.feature.audio.audio_schema import VoiceListResponse, VoiceProfile
 
 logger = logging.getLogger(__name__)
 
 # Directory for cached audio clips
-STATIC_DIR = Path("static")
+STATIC_DIR = app_config.RESOLVED_STATIC_DIR
 AUDIO_CACHE_DIR = STATIC_DIR / "audio_cache"
 AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Audio Cache LRU Eviction Configuration ──────────────────────────────
-MAX_CACHE_SIZE_MB = 100          # Maximum total cache folder size in MB
-MAX_FILE_AGE_SECONDS = 7 * 86400 # Auto-delete files not accessed for 7 days
+MAX_CACHE_SIZE_MB = app_config.MAX_CACHE_SIZE_MB          # Maximum total cache folder size in MB
+MAX_FILE_AGE_SECONDS = app_config.MAX_FILE_AGE_SECONDS # Auto-delete files not accessed for configured period
 
 
 def clean_audio_cache() -> None:
@@ -190,7 +196,7 @@ SUPPORTED_VOICES: list[VoiceProfile] = [
 ]
 
 VOICE_MAP = {v.id: v for v in SUPPORTED_VOICES}
-DEFAULT_VOICE = "en-US-JennyNeural"
+DEFAULT_VOICE = app_config.DEFAULT_TTS_VOICE
 
 
 def get_voice_list() -> VoiceListResponse:
@@ -227,12 +233,24 @@ async def synthesize_to_file(
     if output_path.exists() and output_path.stat().st_size > 0:
         return output_path, True
 
-    # Generate via edge-tts
-    communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch)
-    await communicate.save(str(output_path))
+    # Generate via edge-tts into a temporary file first, then atomically replace
+    temp_fd, temp_str = tempfile.mkstemp(dir=AUDIO_CACHE_DIR, prefix="tmp_tts_", suffix=".mp3")
+    os.close(temp_fd)
+    temp_path = Path(temp_str)
+    try:
+        communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch)
+        await communicate.save(str(temp_path))
+        if temp_path.exists() and temp_path.stat().st_size > 0:
+            os.replace(temp_path, output_path)
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
 
     # Evict stale / oversized cache entries after writing a new file
-    clean_audio_cache()
+    await anyio.to_thread.run_sync(clean_audio_cache)
 
     return output_path, False
 
@@ -268,13 +286,24 @@ async def stream_audio_chunks(
             buffer.extend(data)
             yield data
 
-    # Save to disk cache for future requests
+    # Save to disk cache atomically for future requests
     if buffer:
+        temp_fd, temp_str = tempfile.mkstemp(dir=AUDIO_CACHE_DIR, prefix="tmp_tts_stream_", suffix=".mp3")
+        os.close(temp_fd)
+        temp_path = Path(temp_str)
         try:
-            async with aiofiles.open(cached_path, "wb") as f:
+            async with aiofiles.open(temp_path, "wb") as f:
                 await f.write(buffer)
+            if temp_path.exists() and temp_path.stat().st_size > 0:
+                os.replace(temp_path, cached_path)
             # Evict stale / oversized cache entries after writing a new file
             clean_audio_cache()
         except OSError:
             logger.warning(f"Could not save cached audio to {cached_path}")
+        finally:
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
 

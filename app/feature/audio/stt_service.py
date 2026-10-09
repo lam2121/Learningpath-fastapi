@@ -5,7 +5,7 @@ import string
 
 import httpx
 
-from app.core.config import app_config
+from app.core.infra.config import app_config
 from app.feature.audio.audio_schema import STTResponse, STTWordMatch
 
 logger = logging.getLogger(__name__)
@@ -96,7 +96,7 @@ async def transcribe_audio_gemini(audio_bytes: bytes, mime_type: str = "audio/we
     b64_audio = base64.b64encode(audio_bytes).decode("utf-8")
 
     url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{app_config.GOOGLE_GEMINI_API_BASE_URL.rstrip('/')}/v1beta/models/"
         f"{app_config.GEMINI_FLASH_MODEL}:generateContent?key={api_key}"
     )
 
@@ -121,12 +121,12 @@ async def transcribe_audio_gemini(audio_bytes: bytes, mime_type: str = "audio/we
         ],
         "generationConfig": {
             "temperature": 0.0,
-            "maxOutputTokens": 500,
+            "maxOutputTokens": app_config.STT_MAX_OUTPUT_TOKENS,
         },
     }
 
     async with httpx.AsyncClient(
-        timeout=30.0,
+        timeout=app_config.STT_REQUEST_TIMEOUT_SECONDS,
         verify=not app_config.DISABLE_SSL_VERIFY,
     ) as client:
         res = await client.post(url, json=payload)

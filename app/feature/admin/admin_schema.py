@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.models.user import ADMIN_ROLE_ID, LEARNER_ROLE_ID
+
 SKILL_KEYS = ("D_doc", "C_comm", "T_trouble", "G_custom")
 
 
@@ -41,16 +43,22 @@ class Baseline(BaseModel):
 
 
 class SkillDefinition(BaseModel):
-    description: str = Field(min_length=1)
+    description: str | dict[str, str]
     example_questions: list[str] = Field(default_factory=list)
 
     @field_validator("description")
     @classmethod
-    def normalize_description(cls, v: str) -> str:
-        cleaned = v.strip()
-        if not cleaned:
-            raise ValueError("skill description is required")
-        return cleaned
+    def normalize_description(cls, v: str | dict[str, str]) -> str | dict[str, str]:
+        if isinstance(v, str):
+            cleaned = v.strip()
+            if not cleaned:
+                raise ValueError("skill description is required")
+            return cleaned
+        if isinstance(v, dict):
+            if not any(str(val).strip() for val in v.values()):
+                raise ValueError("skill description cannot be empty")
+            return {k: str(val).strip() for k, val in v.items()}
+        return v
 
     @field_validator("example_questions")
     @classmethod
@@ -71,7 +79,7 @@ class RoleSkillDefinitions(BaseModel):
 
 class RoleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    job_description: str = Field(min_length=1)
+    job_description: str | dict[str, str] = Field(min_length=1)
     baseline: Baseline
     skill_definitions: RoleSkillDefinitions
     seed_tier_1: str = Field(min_length=1)
@@ -85,7 +93,7 @@ class RoleCreate(BaseModel):
 
 class RoleUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
-    job_description: str | None = Field(default=None, min_length=1)
+    job_description: str | dict[str, str] | None = Field(default=None, min_length=1)
     baseline: Baseline | None = None
     skill_definitions: RoleSkillDefinitions | None = None
     seed_tier_1: str | None = Field(default=None, min_length=1)
@@ -191,13 +199,91 @@ class GenerateResponse(BaseModel):
     roleId: int
 
 
+class MoreTopicsRequest(BaseModel):
+    skill: str
+    count: int = Field(default=1, ge=1, le=5)
+
+    @field_validator("skill")
+    @classmethod
+    def validate_skill(cls, value: str) -> str:
+        if value not in SKILL_KEYS:
+            raise ValueError(f"skill must be one of {list(SKILL_KEYS)}")
+        return value
+
+
 class ResetLearnersResponse(BaseModel):
     resetLearners: int
     clearedAnswers: int
     clearedRoadmaps: int
     clearedLessons: int
+    clearedTopicQuizzes: int
+    clearedFinalQuizzes: int
     clearedRadarScores: int
     clearedQueueEntries: int
+    clearedFlashcards: int
+
+
+# ─── Users ───────────────────────────────────────────────────────────────────
+
+
+class AdminUserResponse(BaseModel):
+    """One row of the CareerPath roster: local identity + learning state.
+
+    Sourced entirely from `toeic_learningpath.user`. The shared `auth_db` is
+    never read or written here, so this lists exactly the people who have signed
+    into CareerPath — the set an admin can actually act on.
+    """
+
+    id: int
+    name: str
+    email: str
+    roleId: int | None = None
+    createdAt: datetime
+    jobRoleId: int | None = None
+    jobRoleName: str | None = None
+    learningStatus: str
+    lessonsCompleted: int
+    lessonsTotal: int
+    topicQuizzesPassed: int
+    finalQuizStatus: str | None = None
+    flashcardCount: int
+    hasPlacementAnswers: bool
+
+
+class AdminUserListResponse(BaseModel):
+    items: list[AdminUserResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class UserRoleUpdateRequest(BaseModel):
+    roleId: int
+
+    @field_validator("roleId")
+    @classmethod
+    def validate_role_id(cls, value: int) -> int:
+        if value not in (LEARNER_ROLE_ID, ADMIN_ROLE_ID):
+            raise ValueError(
+                f"roleId must be {LEARNER_ROLE_ID} (learner) or {ADMIN_ROLE_ID} (admin)."
+            )
+        return value
+
+
+class ResetLearnerRequest(BaseModel):
+    clearFlashcards: bool = True
+
+
+class ResetLearnerResponse(BaseModel):
+    userId: int
+    clearedAnswers: int
+    clearedRoadmaps: int
+    clearedLessons: int
+    clearedTopicQuizzes: int
+    clearedFinalQuizzes: int
+    clearedRadarScores: int
+    clearedQueueEntries: int
+    clearedFlashcards: int
 
 
 # ─── Preview (stubbed) ───────────────────────────────────────────────────────
@@ -225,18 +311,28 @@ class DashboardData(BaseModel):
     pendingRejected: int
 
 
-class CostDay(BaseModel):
-    date: str
+class CostBucket(BaseModel):
+    """One point on the spend-over-time chart (a day, ISO week, or month)."""
+
+    period: str
+    label: str
     total: float
-    byGenerator: dict
+    calls: int
+    byGenerator: dict[str, float]
 
 
-class GeneratorBreakdown(BaseModel):
-    generator: str
+class CostGroup(BaseModel):
+    """One row of any breakdown (generator / model / provider / track / status)."""
+
+    key: str
+    label: str | None = None
     count: int
+    promptTokens: int
+    completionTokens: int
     totalTokens: int
     totalCost: float
     avgCost: float
+    share: float
 
 
 class CostAlert(BaseModel):
@@ -246,10 +342,21 @@ class CostAlert(BaseModel):
 
 
 class CostDashboardData(BaseModel):
-    totalCost30d: float
-    dailyAverage: float
-    dailyCosts: list[CostDay]
-    generatorBreakdown: list[GeneratorBreakdown]
+    rangeKey: str
+    granularity: str
+    fromDate: str
+    toDate: str
+    totalCost: float
+    totalCalls: int
+    totalTokens: int
+    periodAverage: float
+    buckets: list[CostBucket]
+    byGenerator: list[CostGroup]
+    byModel: list[CostGroup]
+    byProvider: list[CostGroup]
+    byTrack: list[CostGroup]
+    byStatus: list[CostGroup]
+    availableModels: list[str]
     alerts: list[CostAlert]
 
 

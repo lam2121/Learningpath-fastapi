@@ -1,13 +1,12 @@
 from sqlalchemy import Column, DateTime, ForeignKey, Index, String
 from sqlalchemy.dialects.mysql import BIGINT, LONGTEXT
 
-from app.core.database import Base
+from app.core.infra.database import Base
 
 
 class PlacementTestQuestion(Base):
     __tablename__ = "placement_test_question"
     __table_args__ = (
-        Index("fk_placement_test_quiz__idx", "quiz_type_id"),  # [cite: 2]
         Index("fk_placement_test_question_job_role_idx", "job_role_id"),  # [cite: 2]
         {"comment": "Cau hoi test dau vao, sinh boi Generator A"},  # [cite: 2]
     )
@@ -27,11 +26,6 @@ class PlacementTestQuestion(Base):
         String(45),
         nullable=True,
         comment="Context_layer|Language_layer",
-    )  # [cite: 2]
-    quiz_type_id = Column(
-        BIGINT,
-        ForeignKey("quiz_type.id", ondelete="NO ACTION", onupdate="NO ACTION"),
-        nullable=False,
     )  # [cite: 2]
     job_role_id = Column(
         BIGINT,

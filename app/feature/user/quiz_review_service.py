@@ -10,8 +10,8 @@ except ImportError:
 
 from sqlalchemy.orm import Session
 
-from app.feature.onboarding.lesson_quiz_scoring import normalize_index_answer
-from app.feature.onboarding.lesson_quiz_service import (
+from app.feature.quiz.lesson_quiz_scoring import normalize_index_answer
+from app.feature.quiz.lesson_quiz_service import (
     _build_question_bank,
     _normalize_quiz_content,
     _split_question_options,

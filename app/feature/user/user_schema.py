@@ -8,6 +8,7 @@ class UserResponse(BaseModel):
     email: EmailStr
     name: str
     role_id: int | None = None
+    avatar_url: str | None = None
     created_at: datetime
 
     class Config:
@@ -57,8 +58,8 @@ class TopicQuizHistoryEntryResponse(BaseModel):
 
 
 class FinalQuizHistoryEntryResponse(BaseModel):
-    course_id: int
-    course_name: str
+    job_role_id: int
+    role_name: str
     status: str
     best_score_percent: float | None = None
     passed: bool = False
@@ -89,7 +90,7 @@ class UserProfileResponse(UserResponse):
 
 
 class StudySettingsUpdateRequest(BaseModel):
-    daily_study_minutes: int = Field(ge=60, le=360, multiple_of=60)
+    daily_study_minutes: int = Field(ge=5, le=360, multiple_of=5)
 
 
 class AICoachMessageRequest(BaseModel):
@@ -123,7 +124,7 @@ class QuizReviewListResponse(BaseModel):
 
 class QuizReviewAnswerItem(BaseModel):
     review_id: int
-    answer: str
+    answer: str = Field(..., max_length=1000)
 
 
 class QuizReviewSubmitRequest(BaseModel):
@@ -149,5 +150,24 @@ class QuizReviewSubmitResponse(BaseModel):
     failed_count: int
     total_reviewed: int
     remaining_count: int
+
+
+class StreakRestoreRequest(BaseModel):
+    dates: list[str] = Field(..., min_length=1, max_length=30)
+    client_study_minutes: int | None = Field(default=None, ge=0)
+
+
+class StreakStatusResponse(BaseModel):
+    total_studied_minutes: int
+    required_minutes_per_day: int
+    total_earned_credits: int
+    used_credits: int
+    available_credits: int
+    progress_minutes: int
+    progress_percent: float
+    restored_dates: list[str] = []
+    current_streak: int = 0
+    longest_streak: int = 0
+
 
 

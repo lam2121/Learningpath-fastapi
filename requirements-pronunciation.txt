@@ -1,0 +1,8 @@
+# --- Optional Pronunciation Scoring Dependencies (POST /api/audio/pronunciation) ---
+# Install separately on environments with sufficient RAM & disk (>3GB free):
+# pip install -r requirements-pronunciation.txt
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.0+cpu ; sys_platform == "linux"
+torch==2.14.0 ; sys_platform != "linux"
+openpronounce==0.3.0

@@ -1,11 +1,17 @@
 from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, text
 from sqlalchemy.dialects.mysql import BIGINT
 
-from app.core.database import Base
+from app.core.infra.database import Base
 
 # Learner enrollment states (user.learning_status, docs/07 deviation #23).
 LEARNING_NONE = "none"
 LEARNING_ENROLLED = "enrolled"
+
+# CareerPath authorization (user.role_id -> role.id).
+# Admin rights are derived and synchronized bidirectionally from the central
+# Auth Service token claims (Single Source of Truth).
+LEARNER_ROLE_ID = 1
+ADMIN_ROLE_ID = 2
 
 
 class User(Base):
@@ -35,6 +41,9 @@ class User(Base):
     daily_study_minutes = Column(
         Integer, nullable=False, default=120, server_default=text("120")
     )
+    # Relative path to the avatar image on disk (e.g. "avatars/42_abc123.jpg").
+    # Served via /api/static/uploads/avatars/... — NULL means no custom avatar.
+    avatar_path = Column(String(500), nullable=True, default=None)
     created_at = Column(
         DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )

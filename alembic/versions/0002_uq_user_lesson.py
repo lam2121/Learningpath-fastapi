@@ -24,7 +24,9 @@ def upgrade() -> None:
     #    Keep the row with highest progress, latest completed_at, and newest id.
     op.execute(
         """
-        CREATE TEMPORARY TABLE user_lesson_keep AS
+        CREATE TEMPORARY TABLE user_lesson_keep (
+            keep_id BIGINT PRIMARY KEY
+        ) AS
         SELECT id AS keep_id
         FROM (
             SELECT id,

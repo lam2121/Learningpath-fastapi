@@ -22,7 +22,7 @@ class AppConfig(BaseSettings):
     CORS_ORIGINS: str = (
         "http://localhost:3000,http://127.0.0.1:3000,"
         "http://localhost:5173,http://127.0.0.1:5173,"
-        "https://english-practice.tma.com.vn,https://upskills.tma.com.vn,https://builtbylam.com,https://www.builtbylam.com,"
+        "https://builtbylam.com,https://www.builtbylam.com,https://auth.builtbylam.com,"
         "https://localhost:8001"
     )
 
@@ -99,10 +99,10 @@ class AppConfig(BaseSettings):
         return val
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     # ── Central Auth Service ──────────────────────────────────────────────
-    AUTH_SERVICE_URL: str = "https://english-practice.tma.com.vn/api/auth_test"
-    AUTH_JWKS_URL: str = "https://english-practice.tma.com.vn/api/auth_test/.well-known/jwks.json"
+    AUTH_SERVICE_URL: str = os.getenv("AUTH_SERVICE_URL", "https://auth.builtbylam.com/api/auth")
+    AUTH_JWKS_URL: str = os.getenv("AUTH_JWKS_URL", "https://auth.builtbylam.com/api/auth/.well-known/jwks.json")
     AUTH_PUBLIC_KEY_PATH: str = "../auth-service/keys/public_key.pem"
-    JWT_ISSUER: str = os.getenv("JWT_ISSUER", os.getenv("AUTH_TOKEN_ISSUER", "https://english-practice.tma.com.vn/auth"))
+    JWT_ISSUER: str = os.getenv("JWT_ISSUER", os.getenv("AUTH_TOKEN_ISSUER", "https://api.builtbylam.com"))
     JWT_AUDIENCE: str = os.getenv("JWT_AUDIENCE", os.getenv("AUTH_TOKEN_AUDIENCE", "careerpath"))
 
     # The shared HS256 secret that the external auth-service signs JWTs with.

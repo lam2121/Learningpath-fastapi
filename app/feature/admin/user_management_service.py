@@ -179,7 +179,7 @@ def delete_user_learning_data(db: Session, user_id: int, *, admin_id: int) -> No
     """Remove a user from CareerPath: all learner rows plus the local profile.
 
     The shared `auth_db` account is deliberately untouched — it belongs to other
-    TMA apps too. The person can still sign in, and is re-provisioned as a fresh
+    platform apps too. The person can still sign in, and is re-provisioned as a fresh
     learner (`role_id = LEARNER_ROLE_ID`, no progress) if they do.
 
     Idempotent: a user id with no CareerPath row is a no-op.

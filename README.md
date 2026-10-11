@@ -79,7 +79,7 @@ Key names are case-sensitive and match the fields in `app/core/infra/config.py` 
 | **Database** | `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DB` | PyMySQL driver with pooled connections |
 | **Pool Sizing** | `DB_POOL_MIN_SIZE`, `DB_POOL_MAX_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, `DB_CONNECT_TIMEOUT`, `DB_POOL_RECYCLE` | Hardened defaults: 10/25/15/30s/30s/1800s |
 | **Redis** | `REDIS_URL` | Optional — multi-worker SSE Pub/Sub, rate limiting, caching |
-| **JWT Auth** | `SECRET_KEY`, `ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES`, `AUTH_SERVICE_URL`, `AUTH_JWKS_URL`, `JWT_ISSUER`, `JWT_AUDIENCE`, `AUTH_SHARED_SECRET` | Validates against central TMA SSO (`https://english-practice.tma.com.vn/api/auth_test`) |
+| **JWT Auth** | `SECRET_KEY`, `ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES`, `AUTH_SERVICE_URL`, `AUTH_JWKS_URL`, `JWT_ISSUER`, `JWT_AUDIENCE`, `AUTH_SHARED_SECRET` | Validates against central Auth Service (`https://auth.builtbylam.com/api/auth`) |
 | **AI Providers** | `GEMINI_API_KEY`, `GEMINI_FLASH_MODEL`, `GEMINI_PRO_MODEL`, `GROQ_MODEL`, `Groq`, `Mistral`, `OpenRouter` | Gemini Flash 3.1, Gemini Pro 3.5, Groq gpt-oss-120b, Mistral, Gemma 4 31B |
 | **Rate Limiting** | SlowAPI per IP/User | `/api/audio/voices`: 30/m, `/tts/stream`: 20/m, `/tts/generate`: 15/m, `/stt`: 10/m, `/pronunciation`: 5/m |
 | **C-1 Quality Gates** | `C1_MIN_VOCAB`, `C1_MIN_PATTERNS`, `C1_MIN_DIALOGUE_KEY_PHRASES` | Relaxed defaults (6/2/1) for free-tier fallbacks |
@@ -189,7 +189,7 @@ The service has resolved all **21 code audit findings** documented in [**`doc/ca
 
 ```bash
 cd existing_repo
-git remote add origin https://gitsdc.tma.com.vn/careerpath-english/careerpath-fastapi.git
+git remote add origin https://github.com/your-username/careerpath-fastapi.git
 git branch -M main
 git push -uf origin main
 ```

@@ -43,6 +43,7 @@ from app.models.generation import RoleGeneration
 from app.models.job_role import JobRole
 from app.models.lesson import Lesson
 from app.models.placement_test_question import PlacementTestQuestion
+from app.models.rejected_content import RejectedContent
 from app.models.topic import Topic
 from app.models.user import LEARNING_ENROLLED, LEARNING_NONE, User
 from app.models.user_final_quiz import UserFinalQuiz
@@ -265,13 +266,13 @@ def kickoff_more_topics_generation(
     }
 
 
-def kickoff_lesson_generation(db: Session, lesson_id: int, force: bool = False) -> dict:
+def kickoff_lesson_generation(
+    db: Session, lesson_id: int, force: bool = False, resume: bool = False
+) -> dict:
     """Validate a lazy C-1 (theory) + C-2 (quiz) generation for one lesson.
 
-    C-1/C-2 bypass the `RoleGeneration` batch table (docs/06 §4.3) — the row
-    itself acts as the cache and the per-lesson lock in generation.py guards
-    concurrent clicks, so there is nothing to "reserve" here. We only fail
-    fast on invalid state and stale content.
+    Supports `resume=True` to continue from failed attempts, keeping already generated
+    theory content intact to minimize token usage.
     """
     lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
     if lesson is None:
@@ -296,13 +297,13 @@ def kickoff_lesson_generation(db: Session, lesson_id: int, force: bool = False) 
 
     from app.core.ai.dispatch.validators import validate_theory_content
 
-    is_valid_structure = False
-    if lesson.is_generated and isinstance(lesson.theory_content, dict):
+    has_valid_theory = False
+    if isinstance(lesson.theory_content, dict):
         val_res = validate_theory_content(lesson.theory_content)
         if val_res.get("ok"):
-            is_valid_structure = True
+            has_valid_theory = True
 
-    if lesson.is_generated and is_valid_structure and lesson.quiz_content and not force:
+    if lesson.is_generated == 1 and has_valid_theory and lesson.quiz_content and not force:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -312,17 +313,73 @@ def kickoff_lesson_generation(db: Session, lesson_id: int, force: bool = False) 
             ),
         )
 
-    if force:
+    if force and not resume:
         lesson.theory_content = None
         lesson.quiz_content = None
         lesson.estimated_minutes = None
-        lesson.is_generated = False
+        lesson.is_generated = 0
         db.commit()
 
+    msg = (
+        "Resuming lesson generation (reusing theory, generating quiz only to save tokens)"
+        if (resume and has_valid_theory)
+        else "Lesson content generation started (C1 theory -> C2 quiz)"
+    )
+
     return {
-        "message": "Lesson content generation started (C1 theory -> C2 quiz)",
+        "message": msg,
         "roleId": role_id,
+        "hasTheory": has_valid_theory,
     }
+
+
+def list_failed_lessons(db: Session) -> list[dict]:
+    """Retrieve all lessons where generation failed (is_generated == -1)."""
+    rows = (
+        db.query(Lesson, Topic, JobRole)
+        .join(Topic, Lesson.topic_id == Topic.id)
+        .join(JobRole, Topic.role_id == JobRole.id)
+        .filter(Lesson.is_generated == -1)
+        .order_by(Lesson.id.desc())
+        .all()
+    )
+    from app.core.ai.dispatch.validators import validate_theory_content
+
+    result = []
+    for lesson, topic, role in rows:
+        has_partial = False
+        if isinstance(lesson.theory_content, dict):
+            val = validate_theory_content(lesson.theory_content)
+            has_partial = bool(val.get("ok"))
+
+        rej = (
+            db.query(RejectedContent)
+            .filter(
+                RejectedContent.role_id == role.id,
+                RejectedContent.input_preview.like(f"%lesson_id={lesson.id}%"),
+            )
+            .order_by(RejectedContent.id.desc())
+            .first()
+        )
+        err_msg = rej.error if rej else ("Quiz generation failed" if has_partial else "Theory generation failed")
+
+        result.append(
+            {
+                "id": lesson.id,
+                "title": lesson.title,
+                "primary_skill": lesson.primary_skill,
+                "difficulty_tier": lesson.difficulty_tier,
+                "topic_id": topic.id,
+                "topic_name": topic.name,
+                "role_id": role.id,
+                "role_name": role.name,
+                "has_partial_theory": has_partial,
+                "failed_step": "C2" if has_partial else "C1",
+                "error_message": err_msg,
+                "created_at": rej.created_at if rej else None,
+            }
+        )
+    return result
 
 
 def reset_role_learners(db: Session, role_id: int) -> dict:

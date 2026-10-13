@@ -39,6 +39,7 @@ from app.feature.admin.generation_service import (  # noqa: F401
     kickoff_course_generation,
     kickoff_more_topics_generation,
     kickoff_lesson_generation,
+    list_failed_lessons,
     reset_role_learners,
     get_generation_status,
     get_generation_summary,

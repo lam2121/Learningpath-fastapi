@@ -10,6 +10,7 @@ from app.feature.admin.admin_schema import (
     AiUsageLogResponse,
     CostDashboardData,
     DashboardData,
+    FailedLessonResponse,
     GenerateResponse,
     GenerationStatusResponse,
     GenerationSummaryResponse,
@@ -137,14 +138,24 @@ def generate_lesson_content(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     force: bool = Query(default=False),
+    resume: bool = Query(default=True),
 ):
-    info = admin_service.kickoff_lesson_generation(db, lesson_id, force=force)
+    info = admin_service.kickoff_lesson_generation(
+        db, lesson_id, force=force, resume=resume
+    )
     from app.core.ai.dispatch.generation import (
         generate_lesson_content as _generate_lesson_content,
     )
 
-    background_tasks.add_task(_generate_lesson_content, lesson_id, force=force)
+    background_tasks.add_task(
+        _generate_lesson_content, lesson_id, force=force, resume=resume
+    )
     return GenerateResponse(message=info["message"], roleId=info["roleId"])
+
+
+@router.get("/lessons/failed", response_model=list[FailedLessonResponse])
+def list_failed_lessons(db: Session = Depends(get_db)):
+    return admin_service.list_failed_lessons(db)
 
 
 @router.post("/roles/{role_id}/reset-learners", response_model=ResetLearnersResponse)

@@ -65,6 +65,7 @@ from app.models.job_role import JobRole
 from app.models.lesson import Lesson
 from app.models.rejected_content import RejectedContent
 from app.models.topic import Topic
+from app.models.user import ADMIN_ROLE_ID, User
 from app.models.user_roadmap import UserRoadmap
 
 # ─── Generator C (C-1 Theory + C-2 Quiz) — lazy per-lesson ───────────────────
@@ -783,11 +784,16 @@ async def _generate_lesson_quiz(
     )
 
 
-async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dict:
+async def generate_lesson_content(
+    lesson_id: int, *, force: bool = False, resume: bool = False
+) -> dict:
     """Lazily generate a lesson's theory (C-1) + quiz (C-2), in that order.
 
     - Skips silently when the lesson is already generated (role-scoped cache).
-    - `force=True` clears theory/quiz and regenerates (~$0.05 per rerun).
+    - `force=True` clears theory/quiz and regenerates from scratch (~$0.05 per rerun).
+    - `resume=True` reuses already generated valid theory content (C-1) and only
+      generates the quiz (C-2), saving ~70% tokens.
+    - Notifies all admins in real-time when generation fails or succeeds.
     - Per-lesson lock; usage/rejected/cost plumbing identical to Generators A/B.
     """
     async with _lesson_locks.lock(lesson_id):
@@ -808,29 +814,31 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
             if role is None:
                 return {"status": "failed", "error": "role not found"}
 
-            if force:
+            # Validate whether theory_content already exists and has valid structure
+            has_valid_theory = False
+            if isinstance(lesson.theory_content, dict):
+                val_res = validate_theory_content(lesson.theory_content)
+                if val_res.get("ok"):
+                    has_valid_theory = True
+
+            if force and not resume:
                 lesson.theory_content = None
                 lesson.quiz_content = None
                 lesson.estimated_minutes = None
                 lesson.is_generated = 0
+                has_valid_theory = False
                 db.commit()
 
-            # Robust check: A lesson is ONLY genuinely generated if theory_content passes strict validation
-            is_valid_structure = False
-            if lesson.is_generated == 1 and isinstance(lesson.theory_content, dict):
-                val_res = validate_theory_content(lesson.theory_content)
-                if val_res["ok"]:
-                    is_valid_structure = True
-
-            if lesson.is_generated == 1 and is_valid_structure and lesson.quiz_content:
+            # Robust check: A lesson is genuinely complete if both theory and quiz are present
+            if lesson.is_generated == 1 and has_valid_theory and lesson.quiz_content and not force:
                 return {
                     "status": "skipped",
                     "message": "lesson already generated (shared — reused by all learners of this role)",
                 }
 
-            if lesson.is_generated == 1 and not is_valid_structure:
+            if lesson.is_generated == 1 and not has_valid_theory:
                 logger.warning(
-                    "Lesson %s marked is_generated=True but theory_content has invalid/legacy structure (%s). Auto-regenerating cleanly.",
+                    "Lesson %s marked is_generated=1 but theory_content has invalid/legacy structure (%s). Auto-regenerating cleanly.",
                     lesson_id,
                     type(lesson.theory_content).__name__,
                 )
@@ -838,6 +846,7 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
                 lesson.quiz_content = None
                 lesson.estimated_minutes = None
                 lesson.is_generated = 0
+                has_valid_theory = False
                 db.commit()
 
             try:
@@ -886,6 +895,8 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
                 "job_description": role.job_description,
                 "skill_definitions": role.skill_definitions or {},
                 "progression": progression,
+                "has_valid_theory": has_valid_theory,
+                "existing_theory": lesson.theory_content if has_valid_theory else None,
             }
         finally:
             db.close()
@@ -917,28 +928,42 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
         topic_id = lesson_info["topic_id"]
         lesson_title = lesson_info["title"]
         logger.info(
-            "Generator C starting for lesson %s ('%s', role %s, force=%s)",
+            "Generator C starting for lesson %s ('%s', role %s, force=%s, resume=%s, has_theory=%s)",
             lesson_id,
             lesson_title,
             role_id,
             force,
+            resume,
+            lesson_info["has_valid_theory"],
         )
 
         try:
             # ── C-1: theory (runs async without holding any DB connection) ────
-            (
-                theory,
-                theory_usage,
-                theory_error,
-                c1_raw,
-                c1_checks,
-            ) = await _generate_lesson_theory(
-                client,
-                role_ctx,
-                topic_ctx,
-                lesson_ctx,
-                progression=lesson_info["progression"],
-            )
+            if lesson_info["has_valid_theory"] and (resume or not force):
+                logger.info(
+                    "Generator C resuming for lesson %s ('%s'): reusing existing theory content, skipping C-1 to save tokens.",
+                    lesson_id,
+                    lesson_title,
+                )
+                theory = lesson_info["existing_theory"]
+                theory_usage = []
+                theory_error = None
+                c1_raw = None
+                c1_checks = None
+            else:
+                (
+                    theory,
+                    theory_usage,
+                    theory_error,
+                    c1_raw,
+                    c1_checks,
+                ) = await _generate_lesson_theory(
+                    client,
+                    role_ctx,
+                    topic_ctx,
+                    lesson_ctx,
+                    progression=lesson_info["progression"],
+                )
 
             if theory is None:
                 logger.error(
@@ -948,6 +973,7 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
                     theory_error or "C-1 failed",
                 )
                 db = SessionLocal()
+                admin_ids = []
                 try:
                     for log in theory_usage:
                         _log_usage(
@@ -964,7 +990,7 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
                         db,
                         "C1",
                         role_id,
-                        f"lesson={lesson_title}",
+                        f"lesson_id={lesson_id}&title={lesson_title}&step=C1",
                         theory_error or "unknown",
                         c1_raw,
                         c1_checks,
@@ -983,9 +1009,47 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
                     if lesson:
                         lesson.is_generated = -1
                     db.commit()
+                    admins = db.query(User).filter(User.role_id == ADMIN_ROLE_ID).all()
+                    admin_ids = [int(u.id) for u in admins]
                 finally:
                     db.close()
-                return {"status": "failed", "error": theory_error or "C-1 failed"}
+
+                if admin_ids:
+                    await notification_stream_broker.publish_many(
+                        admin_ids,
+                        {
+                            "type": "admin_notification",
+                            "reason": "lesson_generation_failed",
+                            "lesson_id": int(lesson_id),
+                            "lesson_title": lesson_title,
+                            "topic_id": int(topic_id),
+                            "topic_name": topic_ctx.name,
+                            "role_id": int(role_id),
+                            "role_name": role_ctx.name,
+                            "failed_step": "C1",
+                            "has_partial_theory": False,
+                            "error": str(theory_error or "C-1 theory generation failed"),
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                    )
+
+                return {
+                    "status": "failed",
+                    "error": theory_error or "C-1 failed",
+                    "failed_step": "C1",
+                    "has_partial_theory": False,
+                }
+
+            # Persist C-1 theory content immediately so it acts as a checkpoint for resume
+            if not lesson_info["has_valid_theory"]:
+                db = SessionLocal()
+                try:
+                    chk_lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
+                    if chk_lesson:
+                        chk_lesson.theory_content = theory
+                        db.commit()
+                finally:
+                    db.close()
 
             # ── C-2: quiz (grounded in the generated theory, async without DB connection) ─
             (
@@ -1004,6 +1068,7 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
                     quiz_error or "C-2 failed",
                 )
                 db = SessionLocal()
+                admin_ids = []
                 try:
                     for log in theory_usage:
                         _log_usage(
@@ -1031,7 +1096,7 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
                         db,
                         "C2",
                         role_id,
-                        f"lesson={lesson_title}",
+                        f"lesson_id={lesson_id}&title={lesson_title}&step=C2",
                         quiz_error or "unknown",
                         c2_raw,
                         c2_checks,
@@ -1049,13 +1114,42 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
                     lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
                     if lesson:
                         lesson.is_generated = -1
+                        lesson.theory_content = theory  # Retain theory checkpoint
                     db.commit()
+                    admins = db.query(User).filter(User.role_id == ADMIN_ROLE_ID).all()
+                    admin_ids = [int(u.id) for u in admins]
                 finally:
                     db.close()
-                return {"status": "failed", "error": quiz_error or "C-2 failed"}
+
+                if admin_ids:
+                    await notification_stream_broker.publish_many(
+                        admin_ids,
+                        {
+                            "type": "admin_notification",
+                            "reason": "lesson_generation_failed",
+                            "lesson_id": int(lesson_id),
+                            "lesson_title": lesson_title,
+                            "topic_id": int(topic_id),
+                            "topic_name": topic_ctx.name,
+                            "role_id": int(role_id),
+                            "role_name": role_ctx.name,
+                            "failed_step": "C2",
+                            "has_partial_theory": True,
+                            "error": str(quiz_error or "C-2 quiz generation failed"),
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                    )
+
+                return {
+                    "status": "failed",
+                    "error": quiz_error or "C-2 failed",
+                    "failed_step": "C2",
+                    "has_partial_theory": True,
+                }
 
             # Persist successful generation results with a short-lived DB session
             db = SessionLocal()
+            admin_ids = []
             try:
                 for log in theory_usage:
                     _log_usage(
@@ -1087,6 +1181,19 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
                     lesson.estimated_minutes = estimate_lesson_duration(theory, quiz)
                     lesson.is_generated = 1
 
+                # Auto-resolve any pending rejected_content records for this lesson
+                pending_rejected = (
+                    db.query(RejectedContent)
+                    .filter(
+                        RejectedContent.role_id == role_id,
+                        RejectedContent.input_preview.like(f"%lesson_id={lesson_id}%"),
+                        RejectedContent.status == "pending",
+                    )
+                    .all()
+                )
+                for it in pending_rejected:
+                    it.status = "fixed"
+
                 assigned_user_ids = [
                     int(row.user_id)
                     for row in db.query(UserRoadmap.user_id)
@@ -1095,11 +1202,15 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
                     .all()
                 ]
                 db.commit()
+                admins = db.query(User).filter(User.role_id == ADMIN_ROLE_ID).all()
+                admin_ids = [int(u.id) for u in admins]
             except Exception:
                 db.rollback()
                 raise
             finally:
                 db.close()
+
+            # Publish notification to learners
             await notification_stream_broker.publish_many(
                 assigned_user_ids,
                 {
@@ -1110,6 +1221,22 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
                 },
             )
 
+            # Publish notification to admins that lesson generation has succeeded/fixed
+            if admin_ids:
+                await notification_stream_broker.publish_many(
+                    admin_ids,
+                    {
+                        "type": "admin_notification",
+                        "reason": "lesson_generation_succeeded",
+                        "lesson_id": int(lesson_id),
+                        "lesson_title": lesson_title,
+                        "topic_id": int(topic_id),
+                        "topic_name": topic_ctx.name,
+                        "role_id": int(role_id),
+                        "role_name": role_ctx.name,
+                    },
+                )
+
             logger.info(
                 "Generator C finished for lesson %s (role %s)", lesson_id, role_id
             )
@@ -1117,17 +1244,46 @@ async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dic
         except Exception as exc:
             logger.exception("Generator C crashed for lesson %s", lesson_id)
             db = SessionLocal()
+            admin_ids = []
             try:
                 _record_rejected(
-                    db, "C1", role_id, f"lesson={lesson_title}", str(exc), None, None
+                    db,
+                    "C1",
+                    role_id,
+                    f"lesson_id={lesson_id}&title={lesson_title}&step=C1",
+                    str(exc),
+                    None,
+                    None,
                 )
                 _log_usage(db, "C1", role_id, 0, 0, "rejected")
                 lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
                 if lesson:
                     lesson.is_generated = -1
                 db.commit()
+                admins = db.query(User).filter(User.role_id == ADMIN_ROLE_ID).all()
+                admin_ids = [int(u.id) for u in admins]
             except Exception:
                 db.rollback()
             finally:
                 db.close()
+
+            if admin_ids:
+                await notification_stream_broker.publish_many(
+                    admin_ids,
+                    {
+                        "type": "admin_notification",
+                        "reason": "lesson_generation_failed",
+                        "lesson_id": int(lesson_id),
+                        "lesson_title": lesson_title,
+                        "topic_id": int(topic_id),
+                        "topic_name": topic_ctx.name,
+                        "role_id": int(role_id),
+                        "role_name": role_ctx.name,
+                        "failed_step": "C1",
+                        "has_partial_theory": False,
+                        "error": str(exc),
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+
             return {"status": "failed", "error": str(exc)}

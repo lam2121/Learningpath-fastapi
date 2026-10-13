@@ -419,3 +419,24 @@ class KillSwitchState(BaseModel):
 class KillSwitchUpdate(BaseModel):
     enabled: bool
     reason: str | None = None
+
+
+# ─── Failed lessons ─────────────────────────────────────────────────────────
+
+
+class FailedLessonResponse(BaseModel):
+    id: int
+    title: str
+    primarySkill: str = Field(alias="primary_skill")
+    difficultyTier: str = Field(alias="difficulty_tier")
+    topicId: int = Field(alias="topic_id")
+    topicName: str = Field(alias="topic_name")
+    roleId: int = Field(alias="role_id")
+    roleName: str = Field(alias="role_name")
+    hasPartialTheory: bool = Field(alias="has_partial_theory")
+    failedStep: str = Field(alias="failed_step")
+    errorMessage: str | None = Field(default=None, alias="error_message")
+    createdAt: datetime | None = Field(default=None, alias="created_at")
+
+    model_config = {"populate_by_name": True}
+

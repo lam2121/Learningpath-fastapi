@@ -1424,13 +1424,22 @@ async def _generate_lesson_quiz(
     )
 
 
-async def generate_lesson_content(lesson_id: int, *, force: bool = False) -> dict:
+async def generate_lesson_content(
+    lesson_id: int, *, force: bool = False, resume: bool = False
+) -> dict:
     """Lazily generate a lesson's theory (C-1) + quiz (C-2), in that order.
 
-    - Skips silently when the lesson is already generated (role-scoped cache).
-    - `force=True` clears theory/quiz and regenerates (~$0.05 per rerun).
-    - Per-lesson lock; usage/rejected/cost plumbing identical to Generators A/B.
+    Delegates to the modular generator in `app.core.ai.lesson.generation_lesson`.
     """
+    from app.core.ai.lesson.generation_lesson import (
+        generate_lesson_content as _generate_lesson_content,
+    )
+
+    return await _generate_lesson_content(lesson_id, force=force, resume=resume)
+
+
+async def _legacy_generate_lesson_content(lesson_id: int, *, force: bool = False) -> dict:
+    """Legacy generator implementation."""
     lock = _lesson_locks.setdefault(lesson_id, asyncio.Lock())
     async with lock:
         db = SessionLocal()

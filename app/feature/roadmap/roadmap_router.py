@@ -168,7 +168,8 @@ async def stream_roadmap_notifications(
                         queue.get(),
                         timeout=app_config.SSE_NOTIFICATION_TIMEOUT_SECONDS,
                     )
-                    yield _format_sse("roadmap_updated", payload)
+                    event_type = payload.get("type", "roadmap_updated") if isinstance(payload, dict) else "roadmap_updated"
+                    yield _format_sse(event_type, payload)
                 except asyncio.TimeoutError:
                     yield ": keep-alive\n\n"
                 except TimeoutError:
